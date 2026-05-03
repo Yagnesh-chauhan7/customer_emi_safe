@@ -13,6 +13,29 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.customer_emi_app/admin"
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        if (intent.getBooleanExtra("start_kiosk", false)) {
+            try {
+                startLockTask()
+            } catch (e: Exception) {}
+        }
+        if (intent.getBooleanExtra("stop_kiosk", false)) {
+            try {
+                stopLockTask()
+            } catch (e: Exception) {}
+        }
+    }
+
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {

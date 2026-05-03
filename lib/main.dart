@@ -1,7 +1,31 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'services/supabase_service.dart';
+import 'services/background_service.dart';
+import 'overlay_lock_screen.dart';
 
-void main() {
+@pragma("vm:entry-point")
+void overlayMain() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    home: OverlayLockScreen(),
+  ));
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Supabase and Background Service
+  await SupabaseService.initialize();
+  await SupabaseService.getOrCreateDeviceId();
+  
+  if (Platform.isAndroid || Platform.isIOS) {
+    await initializeBackgroundService();
+  }
+
   runApp(const MyApp());
 }
 
@@ -33,23 +57,40 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
   static const platform = MethodChannel('com.example.customer_emi_app/admin');
   bool _isAdminActive = false;
   bool _isDeviceOwner = false;
+  bool _hasOverlayPermission = false;
+  String _deviceId = "Loading...";
 
   @override
   void initState() {
     super.initState();
     _checkStatus();
+    _loadDeviceId();
+  }
+
+  Future<void> _loadDeviceId() async {
+    final id = await SupabaseService.getOrCreateDeviceId();
+    if (mounted) {
+      setState(() {
+        _deviceId = id;
+      });
+    }
   }
 
   Future<void> _checkStatus() async {
     try {
       final bool adminResult = await platform.invokeMethod('isAdminActive');
       final bool ownerResult = await platform.invokeMethod('isDeviceOwner');
+      bool overlayResult = false;
+      if (Platform.isAndroid) {
+        overlayResult = await FlutterOverlayWindow.isPermissionGranted() ?? false;
+      }
+      
       setState(() {
         _isAdminActive = adminResult;
         _isDeviceOwner = ownerResult;
+        _hasOverlayPermission = overlayResult;
       });
       
-      // If we are Device Owner, automatically initialize Kiosk Policies
       if (_isDeviceOwner) {
         await platform.invokeMethod('setKioskPolicies');
       }
@@ -68,12 +109,41 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
     }
   }
 
+  Future<void> _requestOverlayPermission() async {
+    if (Platform.isAndroid) {
+      final bool? res = await FlutterOverlayWindow.requestPermission();
+    }
+    _checkStatus();
+  }
+
   Future<void> _lockDeviceWithKiosk() async {
-    // Navigate to the fullscreen overlay screen
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const KioskLockScreen()),
-    );
+    // This is for local testing. The actual lock is handled via Supabase background service.
+    // If the overlay permission is granted, we can test it directly:
+    if (_hasOverlayPermission) {
+      if (Platform.isAndroid) {
+        if (!await FlutterOverlayWindow.isActive()) {
+          await FlutterOverlayWindow.showOverlay(
+            enableDrag: false,
+            overlayTitle: "Device Locked",
+            overlayContent: "Please contact support",
+            flag: OverlayFlag.focusPointer,
+            visibility: NotificationVisibility.visibilityPublic,
+            positionGravity: PositionGravity.auto,
+            height: WindowSize.matchParent,
+            width: WindowSize.matchParent,
+          );
+        }
+      }
+      try {
+        await platform.invokeMethod('startKioskMode');
+      } catch (e) {
+        debugPrint("Kiosk mode error: $e");
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Overlay permission required first!')),
+      );
+    }
   }
 
   Future<void> _hideAppIcon() async {
@@ -93,15 +163,40 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('EMI Setup (Kiosk)'),
+        title: const Text('EMI Setup (Hybrid)'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(16.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
+              // Device ID Section
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.deepPurple[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.deepPurple),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      "DEVICE ID (SUPABASE)",
+                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      _deviceId,
+                      style: const TextStyle(fontSize: 16, fontFamily: 'monospace'),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              
               Icon(
                 _isDeviceOwner ? Icons.verified_user : (_isAdminActive ? Icons.security : Icons.warning_amber_rounded),
                 size: 80,
@@ -109,34 +204,44 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
               ),
               const SizedBox(height: 20),
               Text(
-                'Device Admin: \${_isAdminActive ? "Yes" : "No"}\\nDevice Owner: \${_isDeviceOwner ? "Yes" : "No (ADB required)"}',
+                'Device Admin: ${_isAdminActive ? "Yes" : "No"}\nDevice Owner: ${_isDeviceOwner ? "Yes" : "No (ADB required)"}\nOverlay Permission: ${_hasOverlayPermission ? "Yes" : "No"}',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 30),
-              if (!_isDeviceOwner)
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.yellow[100],
-                  child: const Text(
-                    "Note: To prevent users from exiting the Lock Screen, you MUST run the ADB command to set this app as Device Owner.",
-                    textAlign: TextAlign.center,
-                  ),
+              
+              if (!_hasOverlayPermission)
+                ElevatedButton.icon(
+                  onPressed: _requestOverlayPermission,
+                  icon: const Icon(Icons.layers),
+                  label: const Text('Grant Overlay Permission'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red[100]),
                 ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
+              
               ElevatedButton.icon(
                 onPressed: _requestAdmin,
                 icon: const Icon(Icons.admin_panel_settings),
                 label: const Text('1. Request Basic Admin'),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
               ElevatedButton.icon(
                 onPressed: _lockDeviceWithKiosk,
                 icon: const Icon(Icons.screen_lock_portrait),
-                label: const Text('2. Test Kiosk Lock Screen'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red[100],
-                ),
+                label: const Text('2. Test Lock (Overlay + Kiosk)'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red[100]),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  if (Platform.isAndroid) {
+                    await FlutterOverlayWindow.closeOverlay();
+                  }
+                  await platform.invokeMethod('stopKioskMode');
+                },
+                icon: const Icon(Icons.lock_open),
+                label: const Text('Unlock (Local Test)'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green[100]),
               ),
               const SizedBox(height: 40),
               const Divider(),
@@ -158,103 +263,6 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
         onPressed: _checkStatus,
         tooltip: 'Refresh Status',
         child: const Icon(Icons.refresh),
-      ),
-    );
-  }
-}
-
-
-// --- THE FULLSCREEN LOCK SCREEN OVERLAY ---
-class KioskLockScreen extends StatefulWidget {
-  const KioskLockScreen({super.key});
-
-  @override
-  State<KioskLockScreen> createState() => _KioskLockScreenState();
-}
-
-class _KioskLockScreenState extends State<KioskLockScreen> {
-  static const platform = MethodChannel('com.example.customer_emi_app/admin');
-
-  @override
-  void initState() {
-    super.initState();
-    // Engage Kiosk Mode immediately when this screen opens
-    _startKiosk();
-  }
-
-  Future<void> _startKiosk() async {
-    try {
-      await platform.invokeMethod('startKioskMode');
-    } on PlatformException catch (e) {
-      debugPrint("Failed to start kiosk: '\${e.message}'.");
-    }
-  }
-
-  Future<void> _stopKiosk() async {
-    try {
-      await platform.invokeMethod('stopKioskMode');
-      if (mounted) {
-        // Pop the screen to return to the dashboard
-        Navigator.pop(context);
-      }
-    } on PlatformException catch (e) {
-      debugPrint("Failed to stop kiosk: '\${e.message}'.");
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // WillPopScope prevents the back button from working in Flutter 
-    // (though in true Kiosk Mode, the physical back button is disabled anyway)
-    return WillPopScope(
-      onWillPop: () async => false, 
-      child: Scaffold(
-        backgroundColor: Colors.red[900], // Aggressive color for locked state
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.lock, size: 100, color: Colors.white),
-                const SizedBox(height: 30),
-                const Text(
-                  "DEVICE LOCKED",
-                  style: TextStyle(
-                    fontSize: 32, 
-                    fontWeight: FontWeight.bold, 
-                    color: Colors.white,
-                    letterSpacing: 2,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  "This device has been locked due to pending EMI payments. All functions have been disabled.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 18, 
-                    color: Colors.white70,
-                  ),
-                ),
-                const SizedBox(height: 60),
-                // The unlock button to return to normal
-                ElevatedButton.icon(
-                  onPressed: _stopKiosk,
-                  icon: const Icon(Icons.lock_open),
-                  label: const Text(
-                    "UNLOCK (DEV TESTING)",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.red[900],
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
