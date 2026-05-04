@@ -2,8 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:android_intent_plus/android_intent.dart';
 import 'services/supabase_service.dart';
-import 'services/background_service.dart';
 import 'overlay_lock_screen.dart';
 
 @pragma("vm:entry-point")
@@ -15,15 +17,96 @@ void overlayMain() {
   ));
 }
 
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  await handleLockAction(message.data['action']);
+}
+
+Future<void> handleLockAction(String? action) async {
+  if (Platform.isAndroid) {
+    if (action == 'LOCK') {
+      try {
+        final intent = AndroidIntent(
+          action: 'android.intent.action.MAIN',
+          package: 'com.example.customer_emi_app',
+          componentName: 'com.example.customer_emi_app.MainActivity',
+          arguments: {'start_kiosk': true},
+          flags: <int>[268435456], // FLAG_ACTIVITY_NEW_TASK
+        );
+        await intent.launch();
+      } catch (e) {
+        debugPrint("Background Kiosk mode error: $e");
+      }
+      
+      if (!(await FlutterOverlayWindow.isActive())) {
+        await FlutterOverlayWindow.showOverlay(
+          enableDrag: false,
+          overlayTitle: "Device Locked",
+          overlayContent: "Please contact support",
+          flag: OverlayFlag.focusPointer,
+          visibility: NotificationVisibility.visibilityPublic,
+          positionGravity: PositionGravity.auto,
+          height: WindowSize.matchParent,
+          width: WindowSize.matchParent,
+        );
+      }
+    } else if (action == 'UNLOCK') {
+      try {
+        final intent = AndroidIntent(
+          action: 'android.intent.action.MAIN',
+          package: 'com.example.customer_emi_app',
+          componentName: 'com.example.customer_emi_app.MainActivity',
+          arguments: {'stop_kiosk': true},
+          flags: <int>[268435456], // FLAG_ACTIVITY_NEW_TASK
+        );
+        await intent.launch();
+      } catch (e) {
+        debugPrint("Background Kiosk unlock error: $e");
+      }
+      
+      await FlutterOverlayWindow.closeOverlay();
+    }
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize Supabase and Background Service
-  await SupabaseService.initialize();
-  await SupabaseService.getOrCreateDeviceId();
-  
   if (Platform.isAndroid || Platform.isIOS) {
-    await initializeBackgroundService();
+    await Firebase.initializeApp();
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    await messaging.requestPermission();
+    
+    // Set background handler
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    
+    // Set foreground handler
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      handleLockAction(message.data['action']);
+    });
+  }
+
+  await SupabaseService.initialize();
+  
+  String? fcmToken;
+  if (Platform.isAndroid || Platform.isIOS) {
+    try {
+      fcmToken = await FirebaseMessaging.instance.getToken();
+      
+      // Listen for token refreshes
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+        SupabaseService.getOrCreateDeviceId(fcmToken: newToken);
+      });
+    } catch (e) {
+      debugPrint("Failed to get FCM token: $e");
+    }
+  }
+
+  try {
+    await SupabaseService.getOrCreateDeviceId(fcmToken: fcmToken);
+  } catch (e) {
+    debugPrint("Failed to sync device ID: $e");
   }
 
   runApp(const MyApp());

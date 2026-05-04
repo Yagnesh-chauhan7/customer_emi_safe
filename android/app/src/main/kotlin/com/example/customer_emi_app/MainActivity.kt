@@ -13,8 +13,25 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.customer_emi_app/admin"
 
+    private var shouldStartKiosk = false
+    private var shouldStopKiosk = false
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Wake up screen to ensure activity can be resumed from background
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+        
         handleIntent(intent)
     }
 
@@ -25,14 +42,29 @@ class MainActivity: FlutterActivity() {
 
     private fun handleIntent(intent: Intent) {
         if (intent.getBooleanExtra("start_kiosk", false)) {
+            shouldStartKiosk = true
+        }
+        if (intent.getBooleanExtra("stop_kiosk", false)) {
+            shouldStopKiosk = true
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (shouldStartKiosk) {
             try {
                 startLockTask()
             } catch (e: Exception) {}
+            shouldStartKiosk = false
         }
-        if (intent.getBooleanExtra("stop_kiosk", false)) {
+        if (shouldStopKiosk) {
             try {
                 stopLockTask()
             } catch (e: Exception) {}
+            shouldStopKiosk = false
+            
+            // Terminate the app and remove it from recents after unlocking
+            finishAndRemoveTask()
         }
     }
 
