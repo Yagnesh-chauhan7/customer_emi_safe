@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,9 +6,13 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/supabase_service.dart';
 import 'overlay_lock_screen.dart';
 
+// ──────────────────────────────────────────────
+// Overlay entry point (separate isolate)
+// ──────────────────────────────────────────────
 @pragma("vm:entry-point")
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,108 +22,259 @@ void overlayMain() {
   ));
 }
 
+// ──────────────────────────────────────────────
+// FCM Background handler (terminated/background isolate)
+// IMPORTANT: ONLY SharedPreferences + AndroidIntent work here.
+// ──────────────────────────────────────────────
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  await handleLockAction(message.data['action']);
-}
-
-Future<void> handleLockAction(String? action) async {
-  if (Platform.isAndroid) {
-    if (action == 'LOCK') {
-      try {
-        final intent = AndroidIntent(
-          action: 'android.intent.action.MAIN',
-          package: 'com.example.customer_emi_app',
-          componentName: 'com.example.customer_emi_app.MainActivity',
-          arguments: {'start_kiosk': true},
-          flags: <int>[268435456], // FLAG_ACTIVITY_NEW_TASK
-        );
-        await intent.launch();
-      } catch (e) {
-        debugPrint("Background Kiosk mode error: $e");
-      }
-      
-      if (!(await FlutterOverlayWindow.isActive())) {
-        await FlutterOverlayWindow.showOverlay(
-          enableDrag: false,
-          overlayTitle: "Device Locked",
-          overlayContent: "Please contact support",
-          flag: OverlayFlag.focusPointer,
-          visibility: NotificationVisibility.visibilityPublic,
-          positionGravity: PositionGravity.auto,
-          height: WindowSize.matchParent,
-          width: WindowSize.matchParent,
-        );
-      }
-    } else if (action == 'UNLOCK') {
-      try {
-        final intent = AndroidIntent(
-          action: 'android.intent.action.MAIN',
-          package: 'com.example.customer_emi_app',
-          componentName: 'com.example.customer_emi_app.MainActivity',
-          arguments: {'stop_kiosk': true},
-          flags: <int>[268435456], // FLAG_ACTIVITY_NEW_TASK
-        );
-        await intent.launch();
-      } catch (e) {
-        debugPrint("Background Kiosk unlock error: $e");
-      }
-      
-      await FlutterOverlayWindow.closeOverlay();
-    }
-  }
-}
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  if (Platform.isAndroid || Platform.isIOS) {
-    await Firebase.initializeApp();
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission();
-    
-    // Set background handler
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-    
-    // Set foreground handler
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      handleLockAction(message.data['action']);
-    });
-  }
-
-  await SupabaseService.initialize();
-  
-  String? fcmToken;
-  if (Platform.isAndroid || Platform.isIOS) {
-    try {
-      fcmToken = await FirebaseMessaging.instance.getToken();
-      
-      // Listen for token refreshes
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-        SupabaseService.getOrCreateDeviceId(fcmToken: newToken);
-      });
-    } catch (e) {
-      debugPrint("Failed to get FCM token: $e");
-    }
-  }
+  final action = message.data['action'] as String?;
+  if (action == null || !Platform.isAndroid) return;
 
   try {
-    await SupabaseService.getOrCreateDeviceId(fcmToken: fcmToken);
+    final prefs = await SharedPreferences.getInstance();
+    if (action == 'LOCK') {
+      await prefs.setBool('is_locked', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'start_kiosk': true},
+        flags: <int>[268435456],
+      ).launch();
+    } else if (action == 'UNLOCK') {
+      await prefs.setBool('is_locked', false);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'stop_kiosk': true},
+        flags: <int>[268435456],
+      ).launch();
+    }
+    // APPLY_POLICIES: can't call MethodChannel here.
+    // Realtime listener or next app open will handle it.
   } catch (e) {
-    debugPrint("Failed to sync device ID: $e");
+    debugPrint('Background FCM error: $e');
   }
-
-  runApp(const MyApp());
 }
 
+// ──────────────────────────────────────────────
+// Shared MethodChannel
+// ──────────────────────────────────────────────
+const _adminChannel = MethodChannel('com.example.customer_emi_app/admin');
+
+// ──────────────────────────────────────────────
+// FIX 3: App-level Realtime subscription (lives for full app lifetime)
+// ──────────────────────────────────────────────
+StreamSubscription<List<Map<String, dynamic>>>? _policyRealtimeSubscription;
+
+// ──────────────────────────────────────────────
+// Show overlay lock screen
+// ──────────────────────────────────────────────
+Future<void> showLockOverlay() async {
+  try {
+    if (!(await FlutterOverlayWindow.isActive())) {
+      await FlutterOverlayWindow.showOverlay(
+        enableDrag: false,
+        overlayTitle: "Device Locked",
+        overlayContent: "Please contact support",
+        flag: OverlayFlag.focusPointer,
+        visibility: NotificationVisibility.visibilityPublic,
+        positionGravity: PositionGravity.auto,
+        height: WindowSize.matchParent,
+        width: WindowSize.matchParent,
+      );
+    }
+  } catch (e) {
+    debugPrint('showLockOverlay error: $e');
+  }
+}
+
+// ──────────────────────────────────────────────
+// Handle LOCK / UNLOCK (foreground main isolate only)
+// ──────────────────────────────────────────────
+Future<void> handleLockAction(String? action) async {
+  if (!Platform.isAndroid) return;
+  final prefs = await SharedPreferences.getInstance();
+
+  if (action == 'LOCK') {
+    await prefs.setBool('is_locked', true);
+    try {
+      await _adminChannel.invokeMethod('startKioskMode');
+    } catch (e) {
+      debugPrint('startKioskMode error: $e');
+    }
+    await showLockOverlay();
+  } else if (action == 'UNLOCK') {
+    await prefs.setBool('is_locked', false);
+    try {
+      await _adminChannel.invokeMethod('stopKioskMode');
+    } catch (e) {
+      debugPrint('stopKioskMode error: $e');
+    }
+    try {
+      await FlutterOverlayWindow.closeOverlay();
+    } catch (_) {}
+  }
+}
+
+// ──────────────────────────────────────────────
+// Apply Device Owner security policies
+// ──────────────────────────────────────────────
+Future<void> applySecurityPolicies({
+  bool? allowFactoryReset,
+  bool? allowAdminRemoval,
+}) async {
+  try {
+    final bool isDeviceOwner =
+        await _adminChannel.invokeMethod('isDeviceOwner');
+    if (!isDeviceOwner) return;
+
+    bool frAllow = allowFactoryReset ?? false;
+    bool arAllow = allowAdminRemoval ?? false;
+
+    if (allowFactoryReset == null || allowAdminRemoval == null) {
+      final deviceId = await SupabaseService.getOrCreateDeviceId();
+      final data = await SupabaseService.client
+          .from('devices')
+          .select('allow_factory_reset, allow_admin_removal')
+          .eq('id', deviceId)
+          .maybeSingle();
+      if (data == null) return;
+      frAllow = data['allow_factory_reset'] as bool? ?? false;
+      arAllow = data['allow_admin_removal'] as bool? ?? false;
+    }
+
+    await _adminChannel.invokeMethod('setFactoryResetAllowed', {'allowed': frAllow});
+    await _adminChannel.invokeMethod('setUninstallBlocked', {'blocked': !arAllow});
+    debugPrint('Policies: factoryReset=$frAllow, adminRemoval=$arAllow');
+  } catch (e) {
+    debugPrint('applySecurityPolicies error: $e');
+  }
+}
+
+// ──────────────────────────────────────────────
+// FIX 4: main() — only Firebase before runApp (fast local read)
+//        Supabase + everything else is deferred to background
+// ──────────────────────────────────────────────
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebase.initializeApp() reads local google-services.json — very fast
+  await Firebase.initializeApp();
+
+  // Register FCM background handler BEFORE runApp (Firebase requirement)
+  if (Platform.isAndroid || Platform.isIOS) {
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
+
+  // Show UI immediately — don't wait for network calls
+  runApp(const MyApp());
+
+  // All network-dependent tasks run after first frame
+  _initializeInBackground();
+}
+
+/// All heavy/network tasks run AFTER the UI is visible.
+Future<void> _initializeInBackground() async {
+  // Wait for first frame to render
+  await Future.delayed(const Duration(milliseconds: 200));
+
+  // FIX 1: Re-apply lock if device was locked before this session
+  final prefs = await SharedPreferences.getInstance();
+  final wasLocked = prefs.getBool('is_locked') ?? false;
+  if (wasLocked && Platform.isAndroid) {
+    try {
+      await _adminChannel.invokeMethod('startKioskMode');
+    } catch (_) {}
+    await showLockOverlay();
+  }
+
+  if (!Platform.isAndroid && !Platform.isIOS) return;
+
+  // FIX 4: Supabase init runs here (network call — not blocking UI)
+  await SupabaseService.initialize();
+
+  // FCM setup
+  try {
+    final messaging = FirebaseMessaging.instance;
+    await messaging.requestPermission(alert: true, badge: true, sound: false);
+
+    if (Platform.isAndroid) {
+      await _adminChannel.invokeMethod('createNotificationChannel');
+    }
+
+    // Register foreground handler AFTER Supabase is ready
+    FirebaseMessaging.onMessage.listen((msg) {
+      final action = msg.data['action'] as String?;
+      if (action == 'APPLY_POLICIES') {
+        applySecurityPolicies();
+      } else {
+        handleLockAction(action);
+      }
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+      final action = msg.data['action'] as String?;
+      if (action == 'APPLY_POLICIES') {
+        applySecurityPolicies();
+      } else {
+        handleLockAction(action);
+      }
+    });
+
+    final fcmToken = await messaging.getToken();
+    messaging.onTokenRefresh.listen((newToken) {
+      SupabaseService.getOrCreateDeviceId(fcmToken: newToken);
+    });
+
+    // Sync device + FCM token to Supabase
+    final deviceId = await SupabaseService.getOrCreateDeviceId(fcmToken: fcmToken);
+
+    // FIX 3: Start app-level Realtime listener for policy changes
+    // Cancels old subscription first to avoid duplicates
+    await _policyRealtimeSubscription?.cancel();
+    _policyRealtimeSubscription = SupabaseService.client
+        .from('devices')
+        .stream(primaryKey: ['id'])
+        .eq('id', deviceId)
+        .listen((List<Map<String, dynamic>> rows) {
+          if (rows.isEmpty) return;
+          final row = rows.first;
+          final allowFactoryReset = row['allow_factory_reset'] as bool? ?? false;
+          final allowAdminRemoval = row['allow_admin_removal'] as bool? ?? false;
+          // Apply Device Owner policies immediately when admin changes them
+          applySecurityPolicies(
+            allowFactoryReset: allowFactoryReset,
+            allowAdminRemoval: allowAdminRemoval,
+          );
+        });
+
+    // Apply security policies on startup
+    await applySecurityPolicies();
+
+    // Show battery optimization dialog (delayed so it doesn't feel intrusive)
+    if (Platform.isAndroid) {
+      await Future.delayed(const Duration(seconds: 3));
+      await _adminChannel.invokeMethod('requestBatteryOptimization');
+    }
+  } catch (e) {
+    debugPrint('Background init error: $e');
+  }
+}
+
+// ──────────────────────────────────────────────
+// App root
+// ──────────────────────────────────────────────
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'EMI Demo',
+      title: 'EMI Device',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
@@ -129,6 +285,9 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ──────────────────────────────────────────────
+// Device Setup / Status Screen
+// ──────────────────────────────────────────────
 class AdminControlScreen extends StatefulWidget {
   const AdminControlScreen({super.key});
 
@@ -137,7 +296,6 @@ class AdminControlScreen extends StatefulWidget {
 }
 
 class _AdminControlScreenState extends State<AdminControlScreen> {
-  static const platform = MethodChannel('com.example.customer_emi_app/admin');
   bool _isAdminActive = false;
   bool _isDeviceOwner = false;
   bool _hasOverlayPermission = false;
@@ -151,94 +309,79 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
   }
 
   Future<void> _loadDeviceId() async {
-    final id = await SupabaseService.getOrCreateDeviceId();
-    if (mounted) {
-      setState(() {
-        _deviceId = id;
-      });
+    // Wait for Supabase to be ready (initialized in background)
+    await Future.delayed(const Duration(seconds: 1));
+    try {
+      final id = await SupabaseService.getOrCreateDeviceId();
+      if (mounted) setState(() => _deviceId = id);
+    } catch (e) {
+      if (mounted) setState(() => _deviceId = 'Initializing...');
     }
   }
 
   Future<void> _checkStatus() async {
     try {
-      final bool adminResult = await platform.invokeMethod('isAdminActive');
-      final bool ownerResult = await platform.invokeMethod('isDeviceOwner');
+      final bool adminResult =
+          await _adminChannel.invokeMethod('isAdminActive');
+      final bool ownerResult =
+          await _adminChannel.invokeMethod('isDeviceOwner');
       bool overlayResult = false;
       if (Platform.isAndroid) {
-        overlayResult = await FlutterOverlayWindow.isPermissionGranted() ?? false;
+        overlayResult = (await FlutterOverlayWindow.isPermissionGranted()) == true;
       }
-      
+      if (!mounted) return;
       setState(() {
         _isAdminActive = adminResult;
         _isDeviceOwner = ownerResult;
         _hasOverlayPermission = overlayResult;
       });
-      
       if (_isDeviceOwner) {
-        await platform.invokeMethod('setKioskPolicies');
+        await _adminChannel.invokeMethod('setKioskPolicies');
       }
     } on PlatformException catch (e) {
-      debugPrint("Failed to get status: '\${e.message}'.");
+      debugPrint("Status check failed: '${e.message}'.");
     }
   }
 
   Future<void> _requestAdmin() async {
     try {
-      await platform.invokeMethod('requestAdmin');
-      await Future.delayed(const Duration(seconds: 3)); 
+      await _adminChannel.invokeMethod('requestAdmin');
+      await Future.delayed(const Duration(seconds: 3));
       _checkStatus();
     } on PlatformException catch (e) {
-      debugPrint("Failed to request admin: '\${e.message}'.");
+      debugPrint("Request admin failed: '${e.message}'.");
     }
   }
 
   Future<void> _requestOverlayPermission() async {
     if (Platform.isAndroid) {
-      final bool? res = await FlutterOverlayWindow.requestPermission();
+      await FlutterOverlayWindow.requestPermission();
     }
     _checkStatus();
   }
 
   Future<void> _lockDeviceWithKiosk() async {
-    // This is for local testing. The actual lock is handled via Supabase background service.
-    // If the overlay permission is granted, we can test it directly:
     if (_hasOverlayPermission) {
-      if (Platform.isAndroid) {
-        if (!await FlutterOverlayWindow.isActive()) {
-          await FlutterOverlayWindow.showOverlay(
-            enableDrag: false,
-            overlayTitle: "Device Locked",
-            overlayContent: "Please contact support",
-            flag: OverlayFlag.focusPointer,
-            visibility: NotificationVisibility.visibilityPublic,
-            positionGravity: PositionGravity.auto,
-            height: WindowSize.matchParent,
-            width: WindowSize.matchParent,
-          );
-        }
-      }
-      try {
-        await platform.invokeMethod('startKioskMode');
-      } catch (e) {
-        debugPrint("Kiosk mode error: $e");
-      }
+      await handleLockAction('LOCK');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Overlay permission required first!')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Overlay permission required first!')),
+        );
+      }
     }
   }
 
   Future<void> _hideAppIcon() async {
     try {
-      await platform.invokeMethod('hideAppIcon');
+      await _adminChannel.invokeMethod('hideAppIcon');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('App hidden!')),
+          const SnackBar(content: Text('App icon hidden!')),
         );
       }
     } on PlatformException catch (e) {
-      debugPrint("Failed to hide icon: '\${e.message}'.");
+      debugPrint("Hide icon failed: '${e.message}'.");
     }
   }
 
@@ -246,7 +389,7 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('EMI Setup (Hybrid)'),
+        title: const Text('EMI Setup'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Center(
@@ -255,7 +398,6 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
-              // Device ID Section
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -265,43 +407,48 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
                 ),
                 child: Column(
                   children: [
-                    const Text(
-                      "DEVICE ID (SUPABASE)",
-                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple),
-                    ),
+                    const Text("DEVICE ID",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.deepPurple)),
                     const SizedBox(height: 8),
-                    SelectableText(
-                      _deviceId,
-                      style: const TextStyle(fontSize: 16, fontFamily: 'monospace'),
-                      textAlign: TextAlign.center,
-                    ),
+                    SelectableText(_deviceId,
+                        style: const TextStyle(
+                            fontSize: 14, fontFamily: 'monospace'),
+                        textAlign: TextAlign.center),
                   ],
                 ),
               ),
               const SizedBox(height: 20),
-              
               Icon(
-                _isDeviceOwner ? Icons.verified_user : (_isAdminActive ? Icons.security : Icons.warning_amber_rounded),
+                _isDeviceOwner
+                    ? Icons.verified_user
+                    : (_isAdminActive
+                        ? Icons.security
+                        : Icons.warning_amber_rounded),
                 size: 80,
-                color: _isDeviceOwner ? Colors.blue : (_isAdminActive ? Colors.green : Colors.orange),
+                color: _isDeviceOwner
+                    ? Colors.blue
+                    : (_isAdminActive ? Colors.green : Colors.orange),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Text(
-                'Device Admin: ${_isAdminActive ? "Yes" : "No"}\nDevice Owner: ${_isDeviceOwner ? "Yes" : "No (ADB required)"}\nOverlay Permission: ${_hasOverlayPermission ? "Yes" : "No"}',
+                'Device Admin: ${_isAdminActive ? "✅ Yes" : "❌ No"}\n'
+                'Device Owner: ${_isDeviceOwner ? "✅ Yes" : "❌ No (ADB required)"}\n'
+                'Overlay Permission: ${_hasOverlayPermission ? "✅ Yes" : "❌ No"}',
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(height: 30),
-              
+              const SizedBox(height: 24),
               if (!_hasOverlayPermission)
                 ElevatedButton.icon(
                   onPressed: _requestOverlayPermission,
                   icon: const Icon(Icons.layers),
                   label: const Text('Grant Overlay Permission'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red[100]),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red[100]),
                 ),
               const SizedBox(height: 10),
-              
               ElevatedButton.icon(
                 onPressed: _requestAdmin,
                 icon: const Icon(Icons.admin_panel_settings),
@@ -311,24 +458,21 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
               ElevatedButton.icon(
                 onPressed: _lockDeviceWithKiosk,
                 icon: const Icon(Icons.screen_lock_portrait),
-                label: const Text('2. Test Lock (Overlay + Kiosk)'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red[100]),
+                label: const Text('2. Test Lock'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red[100]),
               ),
               const SizedBox(height: 10),
               ElevatedButton.icon(
-                onPressed: () async {
-                  if (Platform.isAndroid) {
-                    await FlutterOverlayWindow.closeOverlay();
-                  }
-                  await platform.invokeMethod('stopKioskMode');
-                },
+                onPressed: () => handleLockAction('UNLOCK'),
                 icon: const Icon(Icons.lock_open),
                 label: const Text('Unlock (Local Test)'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green[100]),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green[100]),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 32),
               const Divider(),
-              const SizedBox(height: 20),
+              const SizedBox(height: 12),
               ElevatedButton.icon(
                 onPressed: _hideAppIcon,
                 icon: const Icon(Icons.visibility_off),
