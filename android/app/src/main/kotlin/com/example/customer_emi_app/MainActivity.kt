@@ -11,7 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.os.UserManager
-import androidx.activity.OnBackPressedCallback
+
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -45,19 +45,14 @@ class MainActivity: FlutterActivity() {
         
         handleIntent(intent)
 
-        // FIX 2: Modern back button handler — works on Android 13+ (API 33+)
-        // @Deprecated onBackPressed() is ignored on newer Android versions
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (!isKioskActive) {
-                    // Temporarily disable this callback so the system handles it
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
-                    isEnabled = true
-                }
-                // In kiosk mode: do nothing — back button is completely blocked
-            }
-        })
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (!isKioskActive) {
+            super.onBackPressed()
+        }
+        // In kiosk mode: do nothing — back button is completely blocked
     }
 
     override fun onNewIntent(intent: Intent) {
