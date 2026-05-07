@@ -40,6 +40,8 @@ dependencies:
   flutter_overlay_window: ^0.4.1
   device_info_plus: ^10.1.0
   android_intent_plus: ^5.0.2
+  flutter_background_service: ^5.0.10
+  flutter_local_notifications: ^17.2.1
 
 dev_dependencies:
   flutter_test:

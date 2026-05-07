@@ -9,6 +9,8 @@ import 'package:android_intent_plus/android_intent.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/supabase_service.dart';
 import 'overlay_lock_screen.dart';
+import 'services/recovery_protection_service.dart';
+import 'screens/recovery_protection_screen.dart';
 
 // ──────────────────────────────────────────────
 // Overlay entry point (separate isolate)
@@ -156,6 +158,21 @@ Future<void> applySecurityPolicies({
 }
 
 // ──────────────────────────────────────────────
+// Initialize Recovery Mode Protection
+// ──────────────────────────────────────────────
+Future<void> initializeRecoveryProtection() async {
+  if (!Platform.isAndroid) return;
+  try {
+    debugPrint('🔒 Initializing Recovery Mode Protection...');
+    await RecoveryProtectionService.disableOemUnlock();
+    await RecoveryProtectionService.startSecurityMonitoring();
+    debugPrint('✓ Recovery protection initialized');
+  } catch (e) {
+    debugPrint('❌ Recovery Protection Init Error: $e');
+  }
+}
+
+// ──────────────────────────────────────────────
 // FIX 4: main() — only Firebase before runApp (fast local read)
 //        Supabase + everything else is deferred to background
 // ──────────────────────────────────────────────
@@ -169,6 +186,9 @@ void main() async {
   if (Platform.isAndroid || Platform.isIOS) {
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   }
+
+  // Recovery protection (Native Android)
+  await initializeRecoveryProtection();
 
   // Show UI immediately — don't wait for network calls
   runApp(const MyApp());
@@ -480,6 +500,21 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.grey[300],
                   foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const RecoveryProtectionScreen()),
+                  );
+                },
+                icon: const Icon(Icons.shield_outlined),
+                label: const Text('4. Recovery Protection Status'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[100],
+                  foregroundColor: Colors.blue[900],
                 ),
               ),
             ],

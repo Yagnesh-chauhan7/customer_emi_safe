@@ -11,6 +11,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.os.UserManager
+import android.util.Log
+import java.io.File
 
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
@@ -19,6 +21,8 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.customer_emi_app/admin"
+    private lateinit var devicePolicyManager: DevicePolicyManager
+    private lateinit var adminComponent: ComponentName
 
     private var shouldStartKiosk = false
     private var shouldStopKiosk = false
@@ -105,10 +109,14 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        
+        devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        adminComponent = ComponentName(this, MyDeviceAdminReceiver::class.java)
+
+        setupRecoveryModeProtection()
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
-            val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             when (call.method) {
                 "isAdminActive" -> {
@@ -145,6 +153,24 @@ class MainActivity: FlutterActivity() {
                     } catch (e: Exception) {
                         result.error("ERROR", e.message, null)
                     }
+                }
+
+                // ========== NEW METHODS ==========
+                "disableOemUnlock" -> {
+                    result.success(disableOemUnlock())
+                }
+                "isRecoveryModeDetected" -> {
+                    result.success(isRecoveryModeDetected())
+                }
+                "startSecurityMonitoring" -> {
+                    startSecurityMonitoring()
+                    result.success(true)
+                }
+                "initBootloaderLock" -> {
+                    result.success(initBootloaderLock())
+                }
+                "getBootloaderStatus" -> {
+                    result.success(getBootloaderStatus())
                 }
 
                 "startKioskMode" -> {
@@ -269,5 +295,189 @@ class MainActivity: FlutterActivity() {
                 }
             }
         }
+    }
+
+    // ========================================
+    // SOLUTION 1 & 2: Recovery Mode Protection
+    // ========================================
+
+    // ============ SOLUTION 1: OEM Unlock Disable ============
+    private fun disableOemUnlock(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                devicePolicyManager.setOemUnlockAllowed(adminComponent, false)
+                Log.d("RecoveryProtection", "✓ OEM unlock disabled")
+                
+                val prefs = getSharedPreferences("security", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("oem_unlock_disabled", true).apply()
+                
+                true
+            } else {
+                Log.w("RecoveryProtection", "OEM unlock not supported on Android < 9")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("RecoveryProtection", "Error disabling OEM unlock: ${e.message}")
+            false
+        }
+    }
+
+    // ============ SOLUTION 1: Recovery Mode Detection ============
+    private fun isRecoveryModeDetected(): Boolean {
+        return try {
+            val indicators = listOf(
+                File("/recovery").exists(),
+                File("/cache/recovery").exists(),
+                File("/cache/recovery/command").exists(),
+                Build.BOOTLOADER.contains("recovery"),
+                getSystemProperty("ro.boot.mode") == "recovery"
+            )
+
+            if (indicators.any { it }) {
+                Log.e("RecoveryDetection", "⚠️ RECOVERY MODE DETECTED!")
+                handleRecoveryDetection()
+                return true
+            }
+            false
+        } catch (e: Exception) {
+            Log.e("RecoveryDetection", "Error: ${e.message}")
+            false
+        }
+    }
+
+    // ============ SOLUTION 1: Recovery Detection Handler ============
+    private fun handleRecoveryDetection() {
+        try {
+            val prefs = getSharedPreferences("security", Context.MODE_PRIVATE)
+            prefs.edit().putLong("last_recovery_detection", System.currentTimeMillis()).apply()
+
+            try {
+                devicePolicyManager.lockNow()
+                Log.e("RecoveryDetection", "Device locked - recovery detected")
+            } catch (e: Exception) {
+                Log.w("RecoveryDetection", "Could not lock device")
+            }
+
+            reportRecoveryDetectionToBackend()
+
+        } catch (e: Exception) {
+            Log.e("RecoveryDetection", "Error handling recovery: ${e.message}")
+        }
+    }
+
+    // ============ SOLUTION 1: Background Monitoring ============
+    private fun startSecurityMonitoring() {
+        val prefs = getSharedPreferences("security", Context.MODE_PRIVATE)
+        val isMonitoring = prefs.getBoolean("monitoring_active", false)
+        
+        if (isMonitoring) {
+            Log.d("Monitoring", "Monitoring already active")
+            return
+        }
+
+        prefs.edit().putBoolean("monitoring_active", true).apply()
+        Log.d("Monitoring", "Starting security monitoring...")
+
+        Thread {
+            while (true) {
+                try {
+                    Thread.sleep(5 * 60 * 1000)
+
+                    if (isRecoveryModeDetected()) {
+                        Log.e("Monitor", "🚨 Recovery mode access detected!")
+                    }
+
+                    if (isDeviceRooted()) {
+                        Log.e("Monitor", "🚨 Root access detected!")
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        val oemAllowed = devicePolicyManager.isOemUnlockAllowed(adminComponent)
+                        if (oemAllowed) {
+                            Log.e("Monitor", "⚠️ OEM unlock is ENABLED!")
+                            disableOemUnlock()
+                        }
+                    }
+
+                    Log.d("Monitor", "✓ Security check completed")
+
+                } catch (e: Exception) {
+                    Log.e("Monitor", "Error in monitoring: ${e.message}")
+                }
+            }
+        }.start()
+    }
+
+    // ============ Root Detection Helper ============
+    private fun isDeviceRooted(): Boolean {
+        val rootIndicators = listOf(
+            "/system/app/Superuser.apk",
+            "/sbin/su",
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/data/adb/su",
+            "/data/adb/magisk"
+        )
+        return rootIndicators.any { File(it).exists() }
+    }
+
+    // ============ System Property Helper ============
+    private fun getSystemProperty(prop: String): String? {
+        return try {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val method = clazz.getMethod("get", String::class.java)
+            method.invoke(null, prop) as String
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ============ SOLUTION 2: Bootloader Lock ============
+    private fun initBootloaderLock(): Boolean {
+        return try {
+            val prefs = getSharedPreferences("security", Context.MODE_PRIVATE)
+            prefs.edit().apply {
+                putBoolean("bootloader_lock_requested", true)
+                putLong("bootloader_lock_time", System.currentTimeMillis())
+            }.apply()
+
+            Log.d("BootloaderLock", "✓ Bootloader lock initialization started")
+            true
+        } catch (e: Exception) {
+            Log.e("BootloaderLock", "Error: ${e.message}")
+            false
+        }
+    }
+
+    // ============ SOLUTION 2: Bootloader Status Check ============
+    private fun getBootloaderStatus(): Boolean {
+        return try {
+            val isLocked = !Build.BOOTLOADER.contains("unlocked")
+            Log.d("BootloaderStatus", "Bootloader: ${if (isLocked) "LOCKED ✓" else "UNLOCKED ⚠️"}")
+            isLocked
+        } catch (e: Exception) {
+            Log.e("BootloaderStatus", "Error: ${e.message}")
+            false
+        }
+    }
+
+    // ============ Setup Function - Call This in configureFlutterEngine ============
+    private fun setupRecoveryModeProtection() {
+        Log.d("Setup", "Setting up recovery mode protection...")
+        disableOemUnlock()
+        startSecurityMonitoring()
+        Log.d("Setup", "✓ Recovery mode protection initialized")
+    }
+
+    // ============ Backend Reporting ============
+    private fun reportRecoveryDetectionToBackend() {
+        Thread {
+            try {
+                Log.d("Backend", "Reporting recovery detection to backend...")
+                // TODO: Add your backend API call here
+            } catch (e: Exception) {
+                Log.e("Backend", "Error reporting: ${e.message}")
+            }
+        }.start()
     }
 }
