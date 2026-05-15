@@ -9,6 +9,7 @@ import 'package:android_intent_plus/android_intent.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/supabase_service.dart';
 import 'overlay_lock_screen.dart';
+import 'screens/frp_demo_screen.dart';
 
 // ──────────────────────────────────────────────
 // Overlay entry point (separate isolate)
@@ -479,6 +480,21 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
                 label: const Text('3. Hide App Icon'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.grey[300],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const FRPDemoScreen()),
+                  );
+                },
+                icon: const Icon(Icons.security_update_good),
+                label: const Text('Manage FRP'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[100],
                   foregroundColor: Colors.black,
                 ),
               ),
