@@ -38,6 +38,26 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        val frpManager = FRPManager(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "frp_channel").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "enableFRP" -> {
+                    val accounts = call.argument<List<String>>("accounts") ?: emptyList()
+                    result.success(frpManager.enableFRP(accounts))
+                }
+                "disableFRP" -> {
+                    result.success(frpManager.disableFRP())
+                }
+                "getFRPStatus" -> {
+                    result.success(frpManager.isFRPEnabled())
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
