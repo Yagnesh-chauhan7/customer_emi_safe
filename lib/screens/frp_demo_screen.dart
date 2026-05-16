@@ -10,7 +10,7 @@ class FRPDemoScreen extends StatefulWidget {
 
 class _FRPDemoScreenState extends State<FRPDemoScreen> {
   final TextEditingController _accountController = TextEditingController();
-  List<String> _accounts = ["yagnesh.koffeekodes@gmail.com"];
+  List<String> _accounts = [];
   bool _isFRPEnabled = false;
   String _statusMessage = 'Loading status...';
 
@@ -166,3 +166,28 @@ class _FRPDemoScreenState extends State<FRPDemoScreen> {
     );
   }
 }
+
+//todo: FRP Id Response
+/*
+{
+  "resourceName": "people/113415044536067329262",
+  "etag": "%EgMBLjcaBAECBQciDFNZZ3N0KytOWVI0PQ==",
+  "metadata": {
+    "sources": [
+      {
+        "type": "PROFILE",
+        "id": "113415044536067329262",
+        "etag": "#Rd9M6jZwz7o=",
+        "profileMetadata": {
+          "objectType": "PERSON",
+          "userTypes": [
+            "GOOGLE_USER"
+          ]
+        },
+        "updateTime": "2026-05-12T03:08:49.513951Z"
+      }
+    ],
+    "objectType": "PERSON"
+  }
+}
+*/

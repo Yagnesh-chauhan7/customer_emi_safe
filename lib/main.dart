@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:customer_emi_app/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
@@ -10,6 +11,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'services/supabase_service.dart';
 import 'overlay_lock_screen.dart';
 import 'screens/frp_demo_screen.dart';
+import 'screens/connectivity_screen.dart';
+import 'screens/sms_lock_screen.dart';
+import 'screens/device_info_screen.dart';
+import 'screens/permissions_screen.dart';
+import 'screens/activation_screen.dart';
+import 'screens/lock_screen.dart';
+import 'screens/emergency_call_screen.dart';
+
 
 // ──────────────────────────────────────────────
 // Overlay entry point (separate isolate)
@@ -35,8 +44,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   try {
     final prefs = await SharedPreferences.getInstance();
+
     if (action == 'LOCK') {
       await prefs.setBool('is_locked', true);
+      // Launch app to apply kiosk — background isolate can't call MethodChannel
       await AndroidIntent(
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
@@ -53,9 +64,28 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         arguments: {'stop_kiosk': true},
         flags: <int>[268435456],
       ).launch();
+    } else if (action == 'APPLY_POLICIES') {
+      // ── Silent background apply ──────────────────────────────────────
+      // Store the new values from FCM data payload in SharedPrefs.
+      // The MethodChannel call runs via AndroidIntent silently (no UI open).
+      final allowFR = message.data['allow_factory_reset'];
+      final allowAR = message.data['allow_admin_removal'];
+      if (allowFR != null) {
+        await prefs.setBool('allow_factory_reset', allowFR == 'true');
+      }
+      if (allowAR != null) {
+        await prefs.setBool('allow_admin_removal', allowAR == 'true');
+      }
+      // Silently bring the app to foreground so MethodChannel can execute.
+      // FLAG_ACTIVITY_SINGLE_TOP (67108864) | NEW_TASK (268435456) = 335544320
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'apply_policies': true},
+        flags: <int>[335544320], // SINGLE_TOP | NEW_TASK — no new task if already running
+      ).launch();
     }
-    // APPLY_POLICIES: can't call MethodChannel here.
-    // Realtime listener or next app open will handle it.
   } catch (e) {
     debugPrint('Background FCM error: $e');
   }
@@ -137,20 +167,43 @@ Future<void> applySecurityPolicies({
     bool arAllow = allowAdminRemoval ?? false;
 
     if (allowFactoryReset == null || allowAdminRemoval == null) {
-      final deviceId = await SupabaseService.getOrCreateDeviceId();
-      final data = await SupabaseService.client
-          .from('devices')
-          .select('allow_factory_reset, allow_admin_removal')
-          .eq('id', deviceId)
-          .maybeSingle();
-      if (data == null) return;
-      frAllow = data['allow_factory_reset'] as bool? ?? false;
-      arAllow = data['allow_admin_removal'] as bool? ?? false;
+      // 1st: try SharedPrefs cache (works offline & in background)
+      final prefs = await SharedPreferences.getInstance();
+      final cachedFR = prefs.getBool('allow_factory_reset');
+      final cachedAR = prefs.getBool('allow_admin_removal');
+
+      if (cachedFR != null && cachedAR != null) {
+        frAllow = cachedFR;
+        arAllow = cachedAR;
+      } else {
+        // 2nd: fetch from Supabase (online only)
+        try {
+          final deviceId = await SupabaseService.getOrCreateDeviceId();
+          final data = await SupabaseService.client
+              .from('devices')
+              .select('allow_factory_reset, allow_admin_removal')
+              .eq('id', deviceId)
+              .maybeSingle();
+          if (data == null) return;
+          frAllow = data['allow_factory_reset'] as bool? ?? false;
+          arAllow = data['allow_admin_removal'] as bool? ?? false;
+          // Cache the fetched values
+          await prefs.setBool('allow_factory_reset', frAllow);
+          await prefs.setBool('allow_admin_removal', arAllow);
+        } catch (_) {
+          return; // offline and no cache
+        }
+      }
+    } else {
+      // Save provided values to cache too
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('allow_factory_reset', frAllow);
+      await prefs.setBool('allow_admin_removal', arAllow);
     }
 
     await _adminChannel.invokeMethod('setFactoryResetAllowed', {'allowed': frAllow});
     await _adminChannel.invokeMethod('setUninstallBlocked', {'blocked': !arAllow});
-    debugPrint('Policies: factoryReset=$frAllow, adminRemoval=$arAllow');
+    debugPrint('Policies applied: factoryReset=$frAllow, adminRemoval=$arAllow');
   } catch (e) {
     debugPrint('applySecurityPolicies error: $e');
   }
@@ -277,10 +330,11 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'EMI Device',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary),
         useMaterial3: true,
+        scaffoldBackgroundColor: AppColors.background,
       ),
-      home: const AdminControlScreen(),
+      home: const PermissionsScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -495,6 +549,125 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
                 label: const Text('Manage FRP'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blue[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConnectivityScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.wifi_tethering),
+                label: const Text('Connectivity Control'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SmsLockScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.sms_failed),
+                label: const Text('SMS Lock Setup'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const DeviceInfoScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.sim_card_outlined),
+                label: const Text('SIM & Device Info'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PermissionsScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.admin_panel_settings_outlined),
+                label: const Text('App Permissions'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purple[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ActivationScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.verified_user_outlined),
+                label: const Text('Activation Screen'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const LockScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.lock_outline),
+                label: const Text('Lock Screen (Demo)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red[100],
+                  foregroundColor: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const EmergencyCallScreen(),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.emergency_outlined),
+                label: const Text('Emergency Dial (Demo)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red[200],
                   foregroundColor: Colors.black,
                 ),
               ),

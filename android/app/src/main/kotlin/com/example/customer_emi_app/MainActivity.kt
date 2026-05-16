@@ -125,6 +125,66 @@ class MainActivity: FlutterActivity() {
             }
         }
 
+        val connectivityMgr = DeviceConnectivityManager(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "connectivity_channel").setMethodCallHandler { call, result ->
+            when (call.method) {
+                // WiFi
+                "setWifiEnabled"      -> result.success(connectivityMgr.setWifiEnabled(call.argument<Boolean>("enabled") ?: false))
+                "getWifiStatus"       -> result.success(connectivityMgr.getWifiStatus())
+                // Mobile Data
+                "setMobileDataEnabled" -> result.success(connectivityMgr.setMobileDataEnabled(call.argument<Boolean>("enabled") ?: false))
+                "getMobileDataStatus"  -> result.success(connectivityMgr.getMobileDataStatus())
+                // Bluetooth
+                "setBluetoothEnabled" -> result.success(connectivityMgr.setBluetoothEnabled(call.argument<Boolean>("enabled") ?: false))
+                "getBluetoothStatus"  -> result.success(connectivityMgr.getBluetoothStatus())
+                // Location
+                "setLocationEnabled"  -> result.success(connectivityMgr.setLocationEnabled(call.argument<Boolean>("enabled") ?: false))
+                "getLocationStatus"   -> result.success(connectivityMgr.getLocationStatus())
+
+                else -> result.notImplemented()
+            }
+        }
+
+        // ── SMS Lock Channel ──────────────────────────────────────
+        val smsPrefs = getSharedPreferences(SmsReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sms_lock_channel").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getSecretCode" -> {
+                    val code = smsPrefs.getString(SmsReceiver.KEY_SECRET, null)
+                    result.success(code)
+                }
+                "setSecretCode" -> {
+                    val code = call.argument<String>("code") ?: ""
+                    if (code.length < 4) {
+                        result.error("INVALID", "Secret code must be at least 4 characters.", null)
+                    } else {
+                        smsPrefs.edit().putString(SmsReceiver.KEY_SECRET, code).apply()
+                        result.success(true)
+                    }
+                }
+                "generateSecretCode" -> {
+                    // Generate a random 6-digit code
+                    val code = (100000..999999).random().toString()
+                    smsPrefs.edit().putString(SmsReceiver.KEY_SECRET, code).apply()
+                    result.success(code)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ── Device Info Channel ───────────────────────────────────
+        val deviceInfoMgr = DeviceInfoManager(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "device_info_channel").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getAllInfo"     -> result.success(deviceInfoMgr.getAllInfo())
+                "getImeiList"   -> result.success(deviceInfoMgr.getImeiList())
+                "getSimDetails" -> result.success(deviceInfoMgr.getSimDetails())
+                "getSerial"     -> result.success(deviceInfoMgr.getSerialNumber())
+                "getDeviceInfo" -> result.success(deviceInfoMgr.getDeviceInfo())
+                else            -> result.notImplemented()
+            }
+        }
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -192,15 +252,20 @@ class MainActivity: FlutterActivity() {
                     try {
                         if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
                             if (!allowed) {
-                                // BLOCK factory reset, OEM unlock, safe boot
+                                // BLOCK factory reset and safe boot (Device Owner allowed)
                                 devicePolicyManager.addUserRestriction(componentName, UserManager.DISALLOW_FACTORY_RESET)
-                                devicePolicyManager.addUserRestriction(componentName, "no_oem_unlock") // DISALLOW_OEM_UNLOCK (API 27+)
                                 devicePolicyManager.addUserRestriction(componentName, UserManager.DISALLOW_SAFE_BOOT)
+                                // no_oem_unlock: only carrier/system apps can set this — skip silently
+                                try {
+                                    devicePolicyManager.addUserRestriction(componentName, "no_oem_unlock")
+                                } catch (_: Exception) {}
                             } else {
                                 // ALLOW (admin granted permission)
                                 devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_FACTORY_RESET)
-                                devicePolicyManager.clearUserRestriction(componentName, "no_oem_unlock") // DISALLOW_OEM_UNLOCK (API 27+)
                                 devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_SAFE_BOOT)
+                                try {
+                                    devicePolicyManager.clearUserRestriction(componentName, "no_oem_unlock")
+                                } catch (_: Exception) {}
                             }
                             result.success(true)
                         } else {
