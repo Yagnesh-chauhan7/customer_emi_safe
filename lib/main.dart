@@ -7,6 +7,7 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/supabase_service.dart';
 import 'overlay_lock_screen.dart';
@@ -225,7 +226,7 @@ void main() async {
   }
 
   // Show UI immediately — don't wait for network calls
-  runApp(const MyApp());
+  runApp(const ProviderScope(child: MyApp()));
 
   // All network-dependent tasks run after first frame
   _initializeInBackground();

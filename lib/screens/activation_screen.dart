@@ -1,27 +1,29 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_colors.dart';
-import 'lock_screen.dart';
+import '../services/activation_service.dart';
 
-class ActivationScreen extends StatefulWidget {
+class ActivationScreen extends ConsumerStatefulWidget {
   const ActivationScreen({super.key});
 
   @override
-  State<ActivationScreen> createState() => _ActivationScreenState();
+  ConsumerState<ActivationScreen> createState() => _ActivationScreenState();
 }
 
-class _ActivationScreenState extends State<ActivationScreen> {
-  // Static data for demonstration (usually comes from server/local storage)
-  final String _activationCode = "SAFE-8829-EMI";
-  final Map<String, String> _customerDetails = {
-    "Name": "Yagnesh Chauhan",
-    "Phone": "+91 9725250740",
-    "IMEI 1": "358291048271034",
-    "Device": "Samsung Galaxy A54",
-    "Status": "Pending Activation",
-  };
+class _ActivationScreenState extends ConsumerState<ActivationScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Fetch customer details based on IMEI as soon as screen loads
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activationProvider.notifier).fetchCustomerDetails();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final activationState = ref.watch(activationProvider);
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -72,6 +74,29 @@ class _ActivationScreenState extends State<ActivationScreen> {
             ),
             const SizedBox(height: 32),
 
+            if (activationState.error != null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 24),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        activationState.error!,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // Activation Code Section (Read-only)
             _buildSectionLabel('ACTIVATION CODE'),
             const SizedBox(height: 8),
@@ -85,16 +110,18 @@ class _ActivationScreenState extends State<ActivationScreen> {
                 ),
               ),
               child: Center(
-                child: Text(
-                  _activationCode,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2,
-                    color: AppColors.primary,
-                    fontFamily: 'monospace',
-                  ),
-                ),
+                child: activationState.isLoading && activationState.activationCode == null
+                    ? const CircularProgressIndicator()
+                    : Text(
+                        activationState.activationCode ?? "Not Found",
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                          color: AppColors.primary,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
               ),
             ),
             const SizedBox(height: 32),
@@ -116,43 +143,31 @@ class _ActivationScreenState extends State<ActivationScreen> {
                   ),
                 ],
               ),
-              child: Column(
-                children: _customerDetails.entries.map((entry) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: activationState.isLoading && activationState.customerName == null
+                  ? const Center(child: CircularProgressIndicator())
+                  : Column(
                       children: [
-                        Text(
-                          entry.key,
-                          style: const TextStyle(
-                            color: AppColors.secondaryText,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        Text(
-                          entry.value,
-                          style: const TextStyle(
-                            color: AppColors.mainText,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        _buildDetailRow("Name", activationState.customerName ?? "N/A"),
+                        _buildDetailRow("Status", activationState.isActivated ? "Activated" : "Pending Activation"),
                       ],
                     ),
-                  );
-                }).toList(),
-              ),
             ),
             const SizedBox(height: 40),
 
             // Buttons
             ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LockScreen()),
-                );
-              },
+              onPressed: (activationState.isLoading || 
+                          activationState.isActivated || 
+                          activationState.customerId == null)
+                  ? null
+                  : () async {
+                      await ref.read(activationProvider.notifier).activateDevice();
+                      if (mounted && ref.read(activationProvider).error == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Device Activated Successfully!')),
+                        );
+                      }
+                    },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
@@ -161,15 +176,25 @@ class _ActivationScreenState extends State<ActivationScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 elevation: 0,
+                disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.5),
               ),
-              child: const Text(
-                'ACTIVATE NOW',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
+              child: activationState.isLoading
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : Text(
+                      activationState.isActivated ? 'ACTIVATED' : 'ACTIVATE NOW',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                      ),
+                    ),
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
@@ -189,6 +214,31 @@ class _ActivationScreenState extends State<ActivationScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String key, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            key,
+            style: const TextStyle(
+              color: AppColors.secondaryText,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              color: AppColors.mainText,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
       ),
     );
   }
