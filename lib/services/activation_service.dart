@@ -1,5 +1,6 @@
+import 'package:customer_emi_app/services/device_info_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:device_information/device_information.dart';
+// import 'package:device_information/device_information.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -71,9 +72,10 @@ class ActivationNotifier extends Notifier<ActivationState> {
         state = state.copyWith(isLoading: false, error: "Phone permission denied.");
         return;
       }
+      final all = await DeviceInfoService.getAllInfo();
 
       // Read IMEI using device_information package
-      final imei = await DeviceInformation.deviceIMEINumber;
+      final imei = List<String>.from(all['imeiList'] ?? []);
       if (imei == null || imei.isEmpty) {
         state = state.copyWith(isLoading: false, error: "Could not read IMEI.");
         return;
