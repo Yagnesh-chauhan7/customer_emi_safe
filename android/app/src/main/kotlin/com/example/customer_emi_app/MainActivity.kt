@@ -349,6 +349,51 @@ class MainActivity: FlutterActivity() {
                     result.success(true)
                 }
 
+                // ------- REMOVE DEVICE OWNER (Deprovision) -------
+                "removeDeviceOwner" -> {
+                    try {
+                        if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                            // 1. Stop kiosk mode if active
+                            try { stopLockTask() } catch (_: Exception) {}
+                            isKioskActive = false
+
+                            // 2. Clear lock task packages
+                            try {
+                                devicePolicyManager.setLockTaskPackages(componentName, emptyArray())
+                            } catch (_: Exception) {}
+
+                            // 3. Clear all user restrictions set by us
+                            val restrictions = listOf(
+                                UserManager.DISALLOW_FACTORY_RESET,
+                                UserManager.DISALLOW_SAFE_BOOT,
+                                UserManager.DISALLOW_REMOVE_MANAGED_PROFILE,
+                                "no_oem_unlock"
+                            )
+                            for (r in restrictions) {
+                                try { devicePolicyManager.clearUserRestriction(componentName, r) } catch (_: Exception) {}
+                            }
+
+                            // 4. Unblock uninstall
+                            try {
+                                devicePolicyManager.setUninstallBlocked(componentName, packageName, false)
+                            } catch (_: Exception) {}
+
+                            // 5. Clear Device Owner — this also removes Device Admin
+                            devicePolicyManager.clearDeviceOwnerApp(packageName)
+
+                            result.success(true)
+                        } else if (devicePolicyManager.isAdminActive(componentName)) {
+                            // Fallback: only a Device Admin (not owner), just remove admin
+                            devicePolicyManager.removeActiveAdmin(componentName)
+                            result.success(true)
+                        } else {
+                            result.success(false) // Already not admin/owner
+                        }
+                    } catch (e: Exception) {
+                        result.error("ERROR", e.message, null)
+                    }
+                }
+
                 else -> {
                     result.notImplemented()
                 }
