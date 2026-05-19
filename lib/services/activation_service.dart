@@ -1,5 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:device_information/device_information.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -54,8 +54,9 @@ class ActivationNotifier extends Notifier<ActivationState> {
   }
 
   final _supabase = Supabase.instance.client;
+  final _channel = const MethodChannel('device_info_channel');
 
-  /// Fetches the device's IMEI and looks up the customer in Supabase.
+  /// Fetches the device's Serial Number and looks up the customer in Supabase.
   Future<void> fetchCustomerDetails() async {
     state = state.copyWith(isLoading: true, error: null);
 
@@ -65,29 +66,36 @@ class ActivationNotifier extends Notifier<ActivationState> {
         return;
       }
 
-      // Request phone state permission required to read IMEI
+      // Request phone state permission required to read Serial Number
       final permissionStatus = await Permission.phone.request();
       if (!permissionStatus.isGranted) {
         state = state.copyWith(isLoading: false, error: "Phone permission denied.");
         return;
       }
 
-      // Read IMEI using device_information package
-      final imei = await DeviceInformation.deviceIMEINumber;
-      if (imei == null || imei.isEmpty) {
-        state = state.copyWith(isLoading: false, error: "Could not read IMEI.");
+      // Read Serial Number using native method channel
+      String? serial;
+      try {
+        serial = await _channel.invokeMethod<String>('getSerial');
+      } on PlatformException catch (e) {
+        state = state.copyWith(isLoading: false, error: "Native error reading serial: ${e.message}");
         return;
       }
 
-      // Query Supabase for customer matching this IMEI
+      if (serial == null || serial.isEmpty || serial.contains("Permission required") || serial.contains("Unavailable")) {
+        state = state.copyWith(isLoading: false, error: "Could not read Serial Number ($serial).");
+        return;
+      }
+
+      // Query Supabase for customer matching this Serial Number
       final response = await _supabase
           .from('customer_table')
           .select('customer_id, customer_name, activaction_code, is_device_active')
-          .or('customer_imei1.eq.$imei,customer_imei2.eq.$imei')
+          .eq('customer_serial', serial)
           .maybeSingle();
 
       if (response == null) {
-        state = state.copyWith(isLoading: false, error: "No customer found for this device's IMEI ($imei).");
+        state = state.copyWith(isLoading: false, error: "No customer found for this device's Serial Number ($serial).");
         return;
       }
 

@@ -14,7 +14,7 @@ class _ActivationScreenState extends ConsumerState<ActivationScreen> {
   @override
   void initState() {
     super.initState();
-    // Fetch customer details based on IMEI as soon as screen loads
+    // Fetch customer details based on Serial Number as soon as screen loads
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(activationProvider.notifier).fetchCustomerDetails();
     });
