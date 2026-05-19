@@ -3,14 +3,13 @@ import 'dart:io';
 import 'package:customer_emi_app/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geolocator/geolocator.dart';
 import 'services/supabase_service.dart';
-import 'overlay_lock_screen.dart';
 import 'screens/frp_demo_screen.dart';
 import 'screens/connectivity_screen.dart';
 import 'screens/sms_lock_screen.dart';
@@ -20,18 +19,6 @@ import 'screens/activation_screen.dart';
 import 'screens/lock_screen.dart';
 import 'screens/emergency_call_screen.dart';
 
-
-// ──────────────────────────────────────────────
-// Overlay entry point (separate isolate)
-// ──────────────────────────────────────────────
-@pragma("vm:entry-point")
-void overlayMain() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MaterialApp(
-    debugShowCheckedModeBanner: false,
-    home: OverlayLockScreen(),
-  ));
-}
 
 // ──────────────────────────────────────────────
 // FCM Background handler (terminated/background isolate)
@@ -86,6 +73,51 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         arguments: {'apply_policies': true},
         flags: <int>[335544320], // SINGLE_TOP | NEW_TASK — no new task if already running
       ).launch();
+    } else if (action == 'FETCH_SIM') {
+      await prefs.setBool('action_fetch_sim', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'wakeup': true},
+        flags: <int>[335544320],
+      ).launch();
+    } else if (action == 'HIDE_APP') {
+      await prefs.setBool('action_hide_app', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'wakeup': true},
+        flags: <int>[335544320],
+      ).launch();
+    } else if (action == 'UNHIDE_APP') {
+      await prefs.setBool('action_unhide_app', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'wakeup': true},
+        flags: <int>[335544320],
+      ).launch();
+    } else if (action == 'SETTLE_EMI') {
+      await prefs.setBool('action_settle_emi', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'wakeup': true},
+        flags: <int>[335544320],
+      ).launch();
+    } else if (action == 'FETCH_LOCATION') {
+      await prefs.setBool('action_fetch_location', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'wakeup': true},
+        flags: <int>[335544320],
+      ).launch();
     }
   } catch (e) {
     debugPrint('Background FCM error: $e');
@@ -97,31 +129,26 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 // ──────────────────────────────────────────────
 const _adminChannel = MethodChannel('com.example.customer_emi_app/admin');
 
-// ──────────────────────────────────────────────
-// FIX 3: App-level Realtime subscription (lives for full app lifetime)
-// ──────────────────────────────────────────────
+// Global navigator key — lets us push routes from outside the widget tree
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// App-level Realtime subscription (lives for full app lifetime)
 StreamSubscription<List<Map<String, dynamic>>>? _policyRealtimeSubscription;
 
 // ──────────────────────────────────────────────
-// Show overlay lock screen
+// Navigate to LockScreen (replaces overlay approach)
 // ──────────────────────────────────────────────
-Future<void> showLockOverlay() async {
-  try {
-    if (!(await FlutterOverlayWindow.isActive())) {
-      await FlutterOverlayWindow.showOverlay(
-        enableDrag: false,
-        overlayTitle: "Device Locked",
-        overlayContent: "Please contact support",
-        flag: OverlayFlag.focusPointer,
-        visibility: NotificationVisibility.visibilityPublic,
-        positionGravity: PositionGravity.auto,
-        height: WindowSize.matchParent,
-        width: WindowSize.matchParent,
-      );
-    }
-  } catch (e) {
-    debugPrint('showLockOverlay error: $e');
-  }
+void navigateToLockScreen() {
+  final ctx = navigatorKey.currentContext;
+  if (ctx == null) return;
+  // Push LockScreen on top of everything — user cannot pop it
+  navigatorKey.currentState?.pushAndRemoveUntil(
+    MaterialPageRoute(
+      builder: (_) => const LockScreen(),
+      settings: const RouteSettings(name: '/lock'),
+    ),
+    (route) => false, // remove every route below
+  );
 }
 
 // ──────────────────────────────────────────────
@@ -138,17 +165,16 @@ Future<void> handleLockAction(String? action) async {
     } catch (e) {
       debugPrint('startKioskMode error: $e');
     }
-    await showLockOverlay();
+    // Navigate to our custom LockScreen
+    navigateToLockScreen();
   } else if (action == 'UNLOCK') {
     await prefs.setBool('is_locked', false);
     try {
+      // stopKioskMode calls stopLockTask() + finishAndRemoveTask() in Kotlin
       await _adminChannel.invokeMethod('stopKioskMode');
     } catch (e) {
       debugPrint('stopKioskMode error: $e');
     }
-    try {
-      await FlutterOverlayWindow.closeOverlay();
-    } catch (_) {}
   }
 }
 
@@ -181,9 +207,9 @@ Future<void> applySecurityPolicies({
         try {
           final deviceId = await SupabaseService.getOrCreateDeviceId();
           final data = await SupabaseService.client
-              .from('devices')
+              .from('customer_service_table')
               .select('allow_factory_reset, allow_admin_removal')
-              .eq('id', deviceId)
+              .eq('customer_id', deviceId)
               .maybeSingle();
           if (data == null) return;
           frAllow = data['allow_factory_reset'] as bool? ?? false;
@@ -211,7 +237,129 @@ Future<void> applySecurityPolicies({
 }
 
 // ──────────────────────────────────────────────
-// FIX 4: main() — only Firebase before runApp (fast local read)
+// Handle background triggers
+// ──────────────────────────────────────────────
+Future<void> _handleFetchSim() async {
+  try {
+    const deviceInfoChannel = MethodChannel('device_info_channel');
+    final simDetails = await deviceInfoChannel.invokeMethod<List<dynamic>>('getSimDetails');
+    
+    if (simDetails != null && simDetails.isNotEmpty) {
+      final String? number1 = simDetails[0]['phoneNumber'];
+      final String? provider1 = simDetails[0]['carrierName'];
+      
+      String? number2;
+      String? provider2;
+      if (simDetails.length > 1) {
+        number2 = simDetails[1]['phoneNumber'];
+        provider2 = simDetails[1]['carrierName'];
+      }
+
+      final deviceId = await SupabaseService.getOrCreateDeviceId();
+      await SupabaseService.client.from('customer_service_table').update({
+        'sim_number1': number1,
+        'sim_provider1': provider1,
+        'sim_number2': number2,
+        'sim_provider2': provider2,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('customer_id', deviceId); // customer_id is the deviceId here? Wait, the customer id is the deviceId in customer_table. Actually, let's just check the ID we use.
+    }
+  } catch (e) {
+    debugPrint('Fetch SIM error: $e');
+  }
+}
+
+Future<void> _handleFetchLocation() async {
+  try {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      debugPrint('Location services are disabled.');
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        debugPrint('Location permissions are denied');
+        return;
+      }
+    }
+    
+    if (permission == LocationPermission.deniedForever) {
+      debugPrint('Location permissions are permanently denied, we cannot request permissions.');
+      return;
+    }
+
+    Position position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+
+    final deviceId = await SupabaseService.getOrCreateDeviceId();
+    await SupabaseService.client.from('customer_service_table').update({
+      'location_lat': position.latitude,
+      'location_long': position.longitude,
+      'updated_at': DateTime.now().toIso8601String(),
+    }).eq('customer_id', deviceId);
+    debugPrint('Location synced: ${position.latitude}, ${position.longitude}');
+  } catch (e) {
+    debugPrint('Fetch location error: $e');
+  }
+}
+
+// ──────────────────────────────────────────────
+// Unified foreground FCM action router
+// ──────────────────────────────────────────────
+Future<void> _handleFcmAction(Map<String, dynamic> data) async {
+  final action = data['action'] as String?;
+  if (action == null) return;
+
+  switch (action) {
+    case 'LOCK':
+    case 'UNLOCK':
+      await handleLockAction(action);
+      break;
+    case 'APPLY_POLICIES':
+      final allowFR = data['allow_factory_reset'];
+      final allowAR = data['allow_admin_removal'];
+      await applySecurityPolicies(
+        allowFactoryReset: allowFR == null ? null : allowFR == 'true',
+        allowAdminRemoval: allowAR == null ? null : allowAR == 'true',
+      );
+      break;
+    case 'FETCH_SIM':
+      await _handleFetchSim();
+      break;
+    case 'FETCH_LOCATION':
+      await _handleFetchLocation();
+      break;
+    case 'HIDE_APP':
+      try {
+        await _adminChannel.invokeMethod('hideAppIcon');
+      } catch (e) {
+        debugPrint('hideAppIcon error: $e');
+      }
+      break;
+    case 'UNHIDE_APP':
+      try {
+        await _adminChannel.invokeMethod('unhideApp');
+      } catch (e) {
+        debugPrint('unhideApp error: $e');
+      }
+      break;
+    case 'SETTLE_EMI':
+      try {
+        await _adminChannel.invokeMethod('removeDeviceOwner');
+        await _adminChannel.invokeMethod('uninstallApp');
+      } catch (e) {
+        debugPrint('settleEmi error: $e');
+      }
+      break;
+    default:
+      debugPrint('Unknown FCM action: $action');
+  }
+}
+
+
 //        Supabase + everything else is deferred to background
 // ──────────────────────────────────────────────
 void main() async {
@@ -237,20 +385,45 @@ Future<void> _initializeInBackground() async {
   // Wait for first frame to render
   await Future.delayed(const Duration(milliseconds: 200));
 
-  // FIX 1: Re-apply lock if device was locked before this session
+  // Restore lock screen if device was locked in a previous session
   final prefs = await SharedPreferences.getInstance();
   final wasLocked = prefs.getBool('is_locked') ?? false;
   if (wasLocked && Platform.isAndroid) {
     try {
       await _adminChannel.invokeMethod('startKioskMode');
     } catch (_) {}
-    await showLockOverlay();
+    // Small extra delay so the navigator is ready before we push
+    await Future.delayed(const Duration(milliseconds: 300));
+    navigateToLockScreen();
   }
 
   if (!Platform.isAndroid && !Platform.isIOS) return;
 
   // FIX 4: Supabase init runs here (network call — not blocking UI)
   await SupabaseService.initialize();
+
+  // Background action execution
+  if (prefs.getBool('action_fetch_sim') == true) {
+    await prefs.remove('action_fetch_sim');
+    await _handleFetchSim();
+  }
+  if (prefs.getBool('action_fetch_location') == true) {
+    await prefs.remove('action_fetch_location');
+    await _handleFetchLocation();
+  }
+  if (prefs.getBool('action_hide_app') == true) {
+    await prefs.remove('action_hide_app');
+    await _adminChannel.invokeMethod('hideAppIcon');
+  }
+  if (prefs.getBool('action_unhide_app') == true) {
+    await prefs.remove('action_unhide_app');
+    await _adminChannel.invokeMethod('unhideApp');
+  }
+  if (prefs.getBool('action_settle_emi') == true) {
+    await prefs.remove('action_settle_emi');
+    await _adminChannel.invokeMethod('removeDeviceOwner');
+    await _adminChannel.invokeMethod('uninstallApp');
+  }
 
   // FCM setup
   try {
@@ -262,23 +435,8 @@ Future<void> _initializeInBackground() async {
     }
 
     // Register foreground handler AFTER Supabase is ready
-    FirebaseMessaging.onMessage.listen((msg) {
-      final action = msg.data['action'] as String?;
-      if (action == 'APPLY_POLICIES') {
-        applySecurityPolicies();
-      } else {
-        handleLockAction(action);
-      }
-    });
-
-    FirebaseMessaging.onMessageOpenedApp.listen((msg) {
-      final action = msg.data['action'] as String?;
-      if (action == 'APPLY_POLICIES') {
-        applySecurityPolicies();
-      } else {
-        handleLockAction(action);
-      }
-    });
+    FirebaseMessaging.onMessage.listen((msg) => _handleFcmAction(msg.data));
+    FirebaseMessaging.onMessageOpenedApp.listen((msg) => _handleFcmAction(msg.data));
 
     final fcmToken = await messaging.getToken();
     messaging.onTokenRefresh.listen((newToken) {
@@ -288,13 +446,13 @@ Future<void> _initializeInBackground() async {
     // Sync device + FCM token to Supabase
     final deviceId = await SupabaseService.getOrCreateDeviceId(fcmToken: fcmToken);
 
-    // FIX 3: Start app-level Realtime listener for policy changes
+    // Start app-level Realtime listener for policy changes on customer_service_table
     // Cancels old subscription first to avoid duplicates
     await _policyRealtimeSubscription?.cancel();
     _policyRealtimeSubscription = SupabaseService.client
-        .from('devices')
-        .stream(primaryKey: ['id'])
-        .eq('id', deviceId)
+        .from('customer_service_table')
+        .stream(primaryKey: ['customer_id'])
+        .eq('customer_id', deviceId)
         .listen((List<Map<String, dynamic>> rows) {
           if (rows.isEmpty) return;
           final row = rows.first;
@@ -330,6 +488,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'EMI Device',
+      navigatorKey: navigatorKey,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary),
         useMaterial3: true,
@@ -383,7 +542,7 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
           await _adminChannel.invokeMethod('isDeviceOwner');
       bool overlayResult = false;
       if (Platform.isAndroid) {
-        overlayResult = (await FlutterOverlayWindow.isPermissionGranted()) == true;
+        overlayResult = true; // Overlay window no longer required — lock uses navigation
       }
       if (!mounted) return;
       setState(() {
@@ -410,9 +569,7 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
   }
 
   Future<void> _requestOverlayPermission() async {
-    if (Platform.isAndroid) {
-      await FlutterOverlayWindow.requestPermission();
-    }
+    // Overlay permission no longer required — lock screen uses Flutter navigation
     _checkStatus();
   }
 

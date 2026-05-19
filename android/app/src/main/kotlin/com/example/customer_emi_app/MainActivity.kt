@@ -241,6 +241,8 @@ class MainActivity: FlutterActivity() {
                         stopLockTask()
                         isKioskActive = false
                         result.success(true)
+                        // Close app & remove from recent apps after unlock
+                        finishAndRemoveTask()
                     } catch (e: Exception) {
                         result.error("ERROR", e.message, null)
                     }
@@ -305,6 +307,17 @@ class MainActivity: FlutterActivity() {
                     pm.setComponentEnabledSetting(
                         componentNameAlias,
                         PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                        PackageManager.DONT_KILL_APP
+                    )
+                    result.success(true)
+                }
+                
+                "unhideApp" -> {
+                    val pm: PackageManager = applicationContext.packageManager
+                    val componentNameAlias = ComponentName(applicationContext, "com.example.customer_emi_app.MainActivity")
+                    pm.setComponentEnabledSetting(
+                        componentNameAlias,
+                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                         PackageManager.DONT_KILL_APP
                     )
                     result.success(true)
@@ -389,6 +402,18 @@ class MainActivity: FlutterActivity() {
                         } else {
                             result.success(false) // Already not admin/owner
                         }
+                    } catch (e: Exception) {
+                        result.error("ERROR", e.message, null)
+                    }
+                }
+
+                "uninstallApp" -> {
+                    try {
+                        val intent = Intent(Intent.ACTION_DELETE)
+                        intent.data = Uri.parse("package:$packageName")
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        startActivity(intent)
+                        result.success(true)
                     } catch (e: Exception) {
                         result.error("ERROR", e.message, null)
                     }

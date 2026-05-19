@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'dart:io';
 
 // ──────────────────────────────────────────────
@@ -20,6 +21,7 @@ class ActivationState {
   final String? customerImei2;
   final String? customerSerial;
   final String? activationCode;
+  final String? ownerId;
   final bool isActivated;
 
   ActivationState({
@@ -34,6 +36,7 @@ class ActivationState {
     this.customerImei2,
     this.customerSerial,
     this.activationCode,
+    this.ownerId,
     this.isActivated = false,
   });
 
@@ -49,6 +52,7 @@ class ActivationState {
     String? customerImei2,
     String? customerSerial,
     String? activationCode,
+    String? ownerId,
     bool? isActivated,
   }) {
     return ActivationState(
@@ -63,6 +67,7 @@ class ActivationState {
       customerImei2: customerImei2 ?? this.customerImei2,
       customerSerial: customerSerial ?? this.customerSerial,
       activationCode: activationCode ?? this.activationCode,
+      ownerId: ownerId ?? this.ownerId,
       isActivated: isActivated ?? this.isActivated,
     );
   }
@@ -140,7 +145,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
         final response = await _supabase
             .from('customer_table')
             .select(
-              'customer_id, customer_name, customer_phone, customer_email, '
+              'customer_id, owner_id, customer_name, customer_phone, customer_email, '
               'customer_imei1, customer_imei2, customer_serial, '
               'activaction_code, is_device_active',
             )
@@ -158,6 +163,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
         state = state.copyWith(
           isLoading: false,
           customerId: response['customer_id'] as String?,
+          ownerId: response['owner_id'] as String?,
           customerName: response['customer_name'] as String?,
           customerPhone: response['customer_phone'] as String?,
           customerEmail: response['customer_email'] as String?,
@@ -215,13 +221,36 @@ class ActivationNotifier extends Notifier<ActivationState> {
         'device_fingerprint': deviceFingerprint,
       });
 
-      // 3. Update customer_table
+      // 3. Gather FCM Token
+      String? fcmToken;
+      try {
+        fcmToken = await FirebaseMessaging.instance.getToken();
+      } catch (_) {}
+
+      // 4. Update customer_table
       await _supabase
           .from('customer_table')
-          .update({'is_device_active': true})
+          .update({
+            'is_device_active': true,
+            if (fcmToken != null) 'fcm_token': fcmToken,
+          })
           .eq('customer_id', state.customerId!);
 
-      // 4. Update local state
+      // 5. Initialize customer_service_table
+      final existingService = await _supabase
+          .from('customer_service_table')
+          .select('service_id')
+          .eq('customer_id', state.customerId!)
+          .maybeSingle();
+
+      if (existingService == null) {
+        await _supabase.from('customer_service_table').insert({
+          'customer_id': state.customerId,
+          'owner_id': state.ownerId,
+        });
+      }
+
+      // 6. Update local state
       state = state.copyWith(isLoading: false, isActivated: true);
     } catch (e) {
       state = state.copyWith(isLoading: false, error: "Activation failed: $e");
