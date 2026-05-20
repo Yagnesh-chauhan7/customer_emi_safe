@@ -15,10 +15,10 @@ const FCM_SERVER_KEY = Deno.env.get("FCM_SERVER_KEY")!;
 serve(async (req: Request) => {
   try {
     const body = await req.json();
-    const { device_id, action, ...extraFields } = body;
+    const { customer_id, action, ...extraFields } = body;
 
-    if (!device_id || !action) {
-      return new Response(JSON.stringify({ error: "device_id and action required" }), {
+    if (!customer_id || !action) {
+      return new Response(JSON.stringify({ error: "customer_id and action required" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
@@ -28,21 +28,26 @@ serve(async (req: Request) => {
 
     // ── 1. Update DB for LOCK / UNLOCK ─────────────────────────────────────────
     if (action === "LOCK") {
-      await supabase.from("devices").update({ is_locked: true }).eq("id", device_id);
+      await supabase.from("customer_service_table").update({ service_lock: true }).eq("customer_id", customer_id);
     } else if (action === "UNLOCK") {
-      await supabase.from("devices").update({ is_locked: false }).eq("id", device_id);
+      await supabase.from("customer_service_table").update({ service_lock: false }).eq("customer_id", customer_id);
+    } else if (action === "HIDE_APP") {
+      await supabase.from("customer_service_table").update({ service_app_hide: true }).eq("customer_id", customer_id);
+    } else if (action === "UNHIDE_APP") {
+      await supabase.from("customer_service_table").update({ service_app_hide: false }).eq("customer_id", customer_id);
     }
     // APPLY_POLICIES: DB is already updated by admin app before calling this function
+    // FETCH_SIM, FETCH_LOCATION, SETTLE_EMI do not need an immediate DB update here before FCM
 
     // ── 2. Get FCM token ────────────────────────────────────────────────────────
-    const { data: device, error } = await supabase
-      .from("devices")
+    const { data: customer, error } = await supabase
+      .from("customer_table")
       .select("fcm_token")
-      .eq("id", device_id)
+      .eq("customer_id", customer_id)
       .single();
 
-    if (error || !device?.fcm_token) {
-      return new Response(JSON.stringify({ error: "Device or FCM token not found" }), {
+    if (error || !customer?.fcm_token) {
+      return new Response(JSON.stringify({ error: "Customer or FCM token not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });
@@ -62,7 +67,7 @@ serve(async (req: Request) => {
 
     // ── 4. Send FCM via HTTP v1 (Legacy API) ────────────────────────────────────
     const fcmPayload = {
-      to: device.fcm_token,
+      to: customer.fcm_token,
       // NO "notification" key → pure data message → silent background delivery
       data: fcmData,
       android: {
