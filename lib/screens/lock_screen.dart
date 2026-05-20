@@ -17,6 +17,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   final TextEditingController _unlockCodeController = TextEditingController();
   late AnimationController _glowController;
   late Animation<double> _glowAnimation;
+  bool _isQrBlurred = true;
   
   // Static data for demonstration
   final String _upiId = "yagnesh13122003@okaxis";
@@ -100,8 +101,8 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     return Theme(
-      data: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF020617),
+      data: ThemeData.light().copyWith(
+        scaffoldBackgroundColor: const Color(0xFFFFFFFF),
         primaryColor: const Color(0xFFEF4444),
       ),
       child: Scaffold(
@@ -114,9 +115,9 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [
-                    Color(0xFF020617),
-                    Color(0xFF0F172A),
-                    Color(0xFF1E1B4B),
+                    Color(0xFFFFFFFF),
+                    Color(0xFFFEF2F2),
+                    Color(0xFFFEE2E2),
                   ],
                 ),
               ),
@@ -134,7 +135,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                     height: 350,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: const Color(0xFFEF4444).withValues(alpha: 0.05 * _glowAnimation.value),
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.1 * _glowAnimation.value),
                     ),
                   );
                 },
@@ -175,11 +176,11 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: const Color(0xFFEF4444).withValues(alpha: 0.03),
-            border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.2), width: 1.5),
+            color: const Color(0xFFEF4444).withValues(alpha: 0.08),
+            border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.3), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+                color: const Color(0xFFEF4444).withValues(alpha: 0.15),
                 blurRadius: 40,
                 spreadRadius: 2,
               ),
@@ -210,8 +211,8 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             _shopName,
             style: const TextStyle(
               fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF991B1B),
               letterSpacing: 0.5,
             ),
             textAlign: TextAlign.center,
@@ -220,14 +221,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.verified_user_outlined, size: 14, color: Colors.white38),
+              const Icon(Icons.verified_user_outlined, size: 14, color: Color(0xFFEF4444)),
               const SizedBox(width: 6),
               Text(
                 _ownerName,
                 style: const TextStyle(
-                  color: Colors.white38,
+                  color: Color(0xFFEF4444),
                   fontSize: 13,
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.bold,
                   letterSpacing: 0.5,
                 ),
               ),
@@ -246,7 +247,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           const Text(
             'PAYMENT GATEWAY',
             style: TextStyle(
-              color: Colors.white,
+              color: Color(0xFF991B1B),
               fontWeight: FontWeight.w900,
               fontSize: 13,
               letterSpacing: 2,
@@ -254,22 +255,58 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           ),
           const SizedBox(height: 24),
           // Premium QR Frame
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  blurRadius: 20,
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              setState(() {
+                _isQrBlurred = !_isQrBlurred;
+              });
+            },
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                ImageFiltered(
+                  imageFilter: ImageFilter.blur(
+                    sigmaX: _isQrBlurred ? 8.0 : 0.0,
+                    sigmaY: _isQrBlurred ? 8.0 : 0.0,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+                          blurRadius: 20,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.qr_code_scanner_rounded,
+                      size: 140,
+                      color: Color(0xFF991B1B),
+                    ),
+                  ),
                 ),
+                if (_isQrBlurred)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF991B1B).withValues(alpha: 0.8),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'TAP TO VIEW QR',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.5,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
               ],
-            ),
-            child: const Icon(
-              Icons.qr_code_scanner_rounded,
-              size: 140,
-              color: Color(0xFF020617),
             ),
           ),
           const SizedBox(height: 24),
@@ -290,17 +327,17 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.03),
+                color: const Color(0xFFEF4444).withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.15)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     _upiId,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.7),
+                    style: const TextStyle(
+                      color: Color(0xFF991B1B),
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       fontFamily: 'monospace',
@@ -323,7 +360,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         const Text(
           'ENTER AUTHORIZATION CODE',
           style: TextStyle(
-            color: Colors.white24,
+            color: Color(0xFFEF4444),
             fontWeight: FontWeight.w800,
             fontSize: 11,
             letterSpacing: 2,
@@ -337,14 +374,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             textAlign: TextAlign.center,
             keyboardType: TextInputType.number,
             style: const TextStyle(
-              color: Colors.white,
+              color: Color(0xFF991B1B),
               fontSize: 24,
-              fontWeight: FontWeight.w200,
+              fontWeight: FontWeight.w800,
               letterSpacing: 12,
             ),
             decoration: InputDecoration(
               hintText: '••••••',
-              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.05)),
+              hintStyle: TextStyle(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
               contentPadding: const EdgeInsets.symmetric(vertical: 18),
               border: InputBorder.none,
             ),
@@ -377,7 +414,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             ),
             child: const Text(
               'UNLOCK DEVICE',
-              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 15),
+              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 15, color: Colors.white),
             ),
           ),
         ),
@@ -391,7 +428,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         const Text(
           'DIRECT ASSISTANCE',
           style: TextStyle(
-            color: Colors.white24,
+            color: Color(0xFFEF4444),
             fontSize: 10,
             fontWeight: FontWeight.w900,
             letterSpacing: 3,
@@ -412,10 +449,10 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
               children: [
                 const Icon(Icons.support_agent_rounded, color: Color(0xFFEF4444), size: 22),
                 const SizedBox(width: 12),
-                Text(
+                const Text(
                   'CONTACT SUPPORT',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
+                    color: Color(0xFF991B1B),
                     fontWeight: FontWeight.w900,
                     fontSize: 13,
                     letterSpacing: 1,
@@ -437,9 +474,15 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.03),
+            color: Colors.white.withValues(alpha: 0.6),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.05), width: 1),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFEF4444).withValues(alpha: 0.05),
+                blurRadius: 10,
+              )
+            ]
           ),
           child: child,
         ),
