@@ -18,12 +18,17 @@ import 'screens/permissions_screen.dart';
 import 'screens/activation_screen.dart';
 import 'screens/lock_screen.dart';
 import 'screens/emergency_call_screen.dart';
+import 'services/wallpaper_service.dart';
 
 
 // ──────────────────────────────────────────────
 // FCM Background handler (terminated/background isolate)
 // IMPORTANT: ONLY SharedPreferences + AndroidIntent work here.
 // ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// Wallpaper service import — used in both background and foreground handlers
+// ──────────────────────────────────────────────
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
@@ -118,6 +123,21 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         arguments: {'wakeup': true},
         flags: <int>[268435456, 67108864],
       ).launch();
+    } else if (action == 'SET_WALLPAPER') {
+      final url = message.data['wallpaper_url'];
+      if (url != null) {
+        try {
+          await WallpaperService.setWallpaper(url);
+        } catch (e) {
+          debugPrint('Background setWallpaper error: $e');
+        }
+      }
+    } else if (action == 'RESET_WALLPAPER') {
+      try {
+        await WallpaperService.resetWallpaper();
+      } catch (e) {
+        debugPrint('Background resetWallpaper error: $e');
+      }
     }
   } catch (e) {
     debugPrint('Background FCM error: $e');
@@ -370,15 +390,29 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
     case 'HIDE_APP':
       try {
         await _adminChannel.invokeMethod('hideAppIcon');
+        // Small delay so Android processes the icon state change
+        await Future.delayed(const Duration(milliseconds: 500));
       } catch (e) {
         debugPrint('hideAppIcon error: $e');
+      } finally {
+        // Always close app + remove from recents after icon is hidden
+        try {
+          await _adminChannel.invokeMethod('finishAndRemoveTask');
+        } catch (_) {}
       }
       break;
     case 'UNHIDE_APP':
       try {
         await _adminChannel.invokeMethod('unhideApp');
+        // Small delay so Android processes the icon state change
+        await Future.delayed(const Duration(milliseconds: 500));
       } catch (e) {
         debugPrint('unhideApp error: $e');
+      } finally {
+        // Always close app + remove from recents after icon is restored
+        try {
+          await _adminChannel.invokeMethod('finishAndRemoveTask');
+        } catch (_) {}
       }
       break;
     case 'SETTLE_EMI':
@@ -387,6 +421,28 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
         await _adminChannel.invokeMethod('uninstallApp');
       } catch (e) {
         debugPrint('settleEmi error: $e');
+      }
+      break;
+    case 'SET_WALLPAPER':
+      final wallpaperUrl = data['wallpaper_url'] as String?;
+      if (wallpaperUrl != null) {
+        try {
+          await WallpaperService.setWallpaper(wallpaperUrl);
+        } catch (e) {
+          debugPrint('setWallpaper error: $e');
+        } finally {
+          // Close app silently after applying
+          try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
+        }
+      }
+      break;
+    case 'RESET_WALLPAPER':
+      try {
+        await WallpaperService.resetWallpaper();
+      } catch (e) {
+        debugPrint('resetWallpaper error: $e');
+      } finally {
+        try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
       }
       break;
     default:
@@ -448,16 +504,50 @@ Future<void> _initializeInBackground() async {
   }
   if (prefs.getBool('action_hide_app') == true) {
     await prefs.remove('action_hide_app');
-    await _adminChannel.invokeMethod('hideAppIcon');
+    try {
+      await _adminChannel.invokeMethod('hideAppIcon');
+      await Future.delayed(const Duration(milliseconds: 500));
+    } catch (_) {}
+    // Close app and remove from recents after hiding icon
+    try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
   }
   if (prefs.getBool('action_unhide_app') == true) {
     await prefs.remove('action_unhide_app');
-    await _adminChannel.invokeMethod('unhideApp');
+    try {
+      await _adminChannel.invokeMethod('unhideApp');
+      await Future.delayed(const Duration(milliseconds: 500));
+    } catch (_) {}
+    // Close app and remove from recents after restoring icon
+    try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
   }
   if (prefs.getBool('action_settle_emi') == true) {
     await prefs.remove('action_settle_emi');
     await _adminChannel.invokeMethod('removeDeviceOwner');
     await _adminChannel.invokeMethod('uninstallApp');
+  }
+  if (prefs.getBool('action_set_wallpaper') == true) {
+    final url = prefs.getString('action_wallpaper_url');
+    await prefs.remove('action_set_wallpaper');
+    await prefs.remove('action_wallpaper_url');
+    if (url != null) {
+      try {
+        await WallpaperService.setWallpaper(url);
+      } catch (e) {
+        debugPrint('Background setWallpaper error: $e');
+      } finally {
+        try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
+      }
+    }
+  }
+  if (prefs.getBool('action_reset_wallpaper') == true) {
+    await prefs.remove('action_reset_wallpaper');
+    try {
+      await WallpaperService.resetWallpaper();
+    } catch (e) {
+      debugPrint('Background resetWallpaper error: $e');
+    } finally {
+      try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
+    }
   }
 
   // FCM setup

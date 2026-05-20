@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- Required to show battery optimization dialog so FCM works when app is hidden -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Required to set device wallpaper via WallpaperManager -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER"/>
 
     <!-- WiFi permissions -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
@@ -157,6 +159,17 @@
                 android:resource="@xml/device_admin" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- WallpaperReceiver: Handles setting and resetting wallpaper in background -->
+        <receiver
+            android:name=".WallpaperReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.customer_emi_app.SET_WALLPAPER" />
+                <action android:name="com.example.customer_emi_app.RESET_WALLPAPER" />
             </intent-filter>
         </receiver>
     </application>
