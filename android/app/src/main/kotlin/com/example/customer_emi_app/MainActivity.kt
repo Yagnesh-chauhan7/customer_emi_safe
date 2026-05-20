@@ -69,10 +69,32 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    private fun applyKioskPoliciesIfNeeded() {
+        try {
+            val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
+            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
+            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+
+            if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    devicePolicyManager.setLockTaskFeatures(
+                        componentName,
+                        DevicePolicyManager.LOCK_TASK_FEATURE_NONE
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore policy errors gracefully
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (shouldStartKiosk) {
             try {
+                applyKioskPoliciesIfNeeded()
                 startLockTask()
                 isKioskActive = true
             } catch (e: Exception) {}
@@ -188,7 +210,9 @@ class MainActivity: FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
+            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
+            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
+            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
 
             when (call.method) {
                 "isAdminActive" -> {
@@ -229,6 +253,7 @@ class MainActivity: FlutterActivity() {
 
                 "startKioskMode" -> {
                     try {
+                        applyKioskPoliciesIfNeeded()
                         startLockTask()
                         isKioskActive = true
                         result.success(true)
@@ -239,13 +264,18 @@ class MainActivity: FlutterActivity() {
                 "stopKioskMode" -> {
                     try {
                         stopLockTask()
-                        isKioskActive = false
-                        result.success(true)
-                        // Close app & remove from recent apps after unlock
-                        finishAndRemoveTask()
                     } catch (e: Exception) {
-                        result.error("ERROR", e.message, null)
+                        // Ignore exceptions if kiosk mode was not active or not allowed
                     }
+                    isKioskActive = false
+                    result.success(true)
+                    // Close app & remove from recent apps after unlock
+                    finishAndRemoveTask()
+                }
+
+                "finishAndRemoveTask" -> {
+                    finishAndRemoveTask()
+                    result.success(true)
                 }
 
                 // ------- FACTORY RESET / OEM UNLOCK BLOCK (Requires Device Owner) -------
@@ -289,8 +319,10 @@ class MainActivity: FlutterActivity() {
                             if (blocked) {
                                 // Also block users from removing device admin via Settings
                                 devicePolicyManager.addUserRestriction(componentName, UserManager.DISALLOW_REMOVE_MANAGED_PROFILE)
+                                devicePolicyManager.addUserRestriction(componentName, UserManager.DISALLOW_UNINSTALL_APPS)
                             } else {
                                 devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_REMOVE_MANAGED_PROFILE)
+                                devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_UNINSTALL_APPS)
                             }
                             result.success(true)
                         } else {
@@ -303,7 +335,7 @@ class MainActivity: FlutterActivity() {
 
                 "hideAppIcon" -> {
                     val pm: PackageManager = applicationContext.packageManager
-                    val componentNameAlias = ComponentName(applicationContext, "com.example.customer_emi_app.MainActivity")
+                    val componentNameAlias = ComponentName(applicationContext, "com.example.customer_emi_app.LauncherAlias")
                     pm.setComponentEnabledSetting(
                         componentNameAlias,
                         PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
@@ -314,7 +346,7 @@ class MainActivity: FlutterActivity() {
                 
                 "unhideApp" -> {
                     val pm: PackageManager = applicationContext.packageManager
-                    val componentNameAlias = ComponentName(applicationContext, "com.example.customer_emi_app.MainActivity")
+                    val componentNameAlias = ComponentName(applicationContext, "com.example.customer_emi_app.LauncherAlias")
                     pm.setComponentEnabledSetting(
                         componentNameAlias,
                         PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
@@ -380,6 +412,7 @@ class MainActivity: FlutterActivity() {
                                 UserManager.DISALLOW_FACTORY_RESET,
                                 UserManager.DISALLOW_SAFE_BOOT,
                                 UserManager.DISALLOW_REMOVE_MANAGED_PROFILE,
+                                UserManager.DISALLOW_UNINSTALL_APPS,
                                 "no_oem_unlock"
                             )
                             for (r in restrictions) {

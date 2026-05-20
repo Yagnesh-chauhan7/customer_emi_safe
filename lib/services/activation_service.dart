@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
 // ──────────────────────────────────────────────
@@ -250,7 +251,11 @@ class ActivationNotifier extends Notifier<ActivationState> {
         });
       }
 
-      // 6. Update local state
+      // 6. Save customer_id locally
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('customer_id', state.customerId!);
+
+      // 7. Update local state
       state = state.copyWith(isLoading: false, isActivated: true);
     } catch (e) {
       state = state.copyWith(isLoading: false, error: "Activation failed: $e");

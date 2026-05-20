@@ -20,7 +20,12 @@ class DeviceConnectivityManager(private val context: Context) {
 
     private val devicePolicyManager: DevicePolicyManager =
         context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-    private val adminComponentName = ComponentName(context, MyDeviceAdminReceiver::class.java)
+    private val adminComponentName: ComponentName
+        get() {
+            val legacyAdmin = ComponentName(context, AdminReceiver::class.java)
+            val myAdmin = ComponentName(context, MyDeviceAdminReceiver::class.java)
+            return if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+        }
 
     private val wifiManager: WifiManager =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager

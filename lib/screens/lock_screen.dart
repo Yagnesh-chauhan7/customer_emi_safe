@@ -1,6 +1,9 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:customer_emi_app/services/sms_lock_service.dart';
+import 'package:customer_emi_app/main.dart';
 import 'emergency_call_screen.dart';
 
 class LockScreen extends StatefulWidget {
@@ -24,6 +27,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    isLockScreenActive = true;
     _glowController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
@@ -35,9 +39,62 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    isLockScreenActive = false;
     _unlockCodeController.dispose();
     _glowController.dispose();
     super.dispose();
+  }
+
+  Future<void> _unlockDevice() async {
+    HapticFeedback.heavyImpact();
+    final enteredCode = _unlockCodeController.text.trim();
+    if (enteredCode.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Please enter authorization code'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFEF4444),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+      return;
+    }
+
+    var storedCode = await SmsLockService.getSecretCode();
+    // Auto-generate if none exists so we don't block
+    if (storedCode == null || storedCode.isEmpty) {
+      storedCode = await SmsLockService.generateSecretCode() ?? '123456';
+    }
+
+    if (enteredCode == storedCode) {
+      // 1. Reset state
+      isLockScreenActive = false;
+
+      // 2. Set SharedPreferences is_locked to false
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('is_locked', false);
+
+      // 3. Stop kiosk mode & close app
+      const adminChannel = MethodChannel('com.example.customer_emi_app/admin');
+      try {
+        await adminChannel.invokeMethod('stopKioskMode');
+      } catch (e) {
+        debugPrint('stopKioskMode error: $e');
+      }
+
+      // 4. Force pop Dart app to make sure Dart VM stops
+      await SystemNavigator.pop();
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Invalid Authorization Code'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFEF4444),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+    }
   }
 
   @override
@@ -312,7 +369,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             ],
           ),
           child: ElevatedButton(
-            onPressed: () => HapticFeedback.heavyImpact(),
+            onPressed: _unlockDevice,
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.transparent,
               shadowColor: Colors.transparent,

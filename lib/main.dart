@@ -65,13 +65,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         await prefs.setBool('allow_admin_removal', allowAR == 'true');
       }
       // Silently bring the app to foreground so MethodChannel can execute.
-      // FLAG_ACTIVITY_SINGLE_TOP (67108864) | NEW_TASK (268435456) = 335544320
+      // 268435456 = FLAG_ACTIVITY_NEW_TASK, 67108864 = FLAG_ACTIVITY_SINGLE_TOP
       await AndroidIntent(
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
         arguments: {'apply_policies': true},
-        flags: <int>[335544320], // SINGLE_TOP | NEW_TASK — no new task if already running
+        flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'FETCH_SIM') {
       await prefs.setBool('action_fetch_sim', true);
@@ -80,7 +80,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
         arguments: {'wakeup': true},
-        flags: <int>[335544320],
+        flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'HIDE_APP') {
       await prefs.setBool('action_hide_app', true);
@@ -89,7 +89,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
         arguments: {'wakeup': true},
-        flags: <int>[335544320],
+        flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'UNHIDE_APP') {
       await prefs.setBool('action_unhide_app', true);
@@ -98,7 +98,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
         arguments: {'wakeup': true},
-        flags: <int>[335544320],
+        flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'SETTLE_EMI') {
       await prefs.setBool('action_settle_emi', true);
@@ -107,7 +107,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
         arguments: {'wakeup': true},
-        flags: <int>[335544320],
+        flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'FETCH_LOCATION') {
       await prefs.setBool('action_fetch_location', true);
@@ -116,7 +116,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
         arguments: {'wakeup': true},
-        flags: <int>[335544320],
+        flags: <int>[268435456, 67108864],
       ).launch();
     }
   } catch (e) {
@@ -131,6 +131,7 @@ const _adminChannel = MethodChannel('com.example.customer_emi_app/admin');
 
 // Global navigator key — lets us push routes from outside the widget tree
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+bool isLockScreenActive = false;
 
 // App-level Realtime subscription (lives for full app lifetime)
 StreamSubscription<List<Map<String, dynamic>>>? _policyRealtimeSubscription;
@@ -139,8 +140,10 @@ StreamSubscription<List<Map<String, dynamic>>>? _policyRealtimeSubscription;
 // Navigate to LockScreen (replaces overlay approach)
 // ──────────────────────────────────────────────
 void navigateToLockScreen() {
+  if (isLockScreenActive) return;
   final ctx = navigatorKey.currentContext;
   if (ctx == null) return;
+  isLockScreenActive = true;
   // Push LockScreen on top of everything — user cannot pop it
   navigatorKey.currentState?.pushAndRemoveUntil(
     MaterialPageRoute(
@@ -175,6 +178,8 @@ Future<void> handleLockAction(String? action) async {
     } catch (e) {
       debugPrint('stopKioskMode error: $e');
     }
+    // Also trigger SystemNavigator.pop() to guarantee close on DartVM side
+    await SystemNavigator.pop();
   }
 }
 
@@ -206,6 +211,7 @@ Future<void> applySecurityPolicies({
         // 2nd: fetch from Supabase (online only)
         try {
           final deviceId = await SupabaseService.getOrCreateDeviceId();
+          if (deviceId == null) return;
           final data = await SupabaseService.client
               .from('customer_service_table')
               .select('allow_factory_reset, allow_admin_removal')
@@ -245,35 +251,50 @@ Future<void> _handleFetchSim() async {
     final simDetails = await deviceInfoChannel.invokeMethod<List<dynamic>>('getSimDetails');
     
     if (simDetails != null && simDetails.isNotEmpty) {
-      final String? number1 = simDetails[0]['phoneNumber'];
-      final String? provider1 = simDetails[0]['carrierName'];
+      final sim1 = Map<dynamic, dynamic>.from(simDetails[0] as Map);
+      final String? number1 = sim1['phoneNumber'] as String?;
+      final String? provider1 = sim1['carrierName'] as String?;
       
       String? number2;
       String? provider2;
       if (simDetails.length > 1) {
-        number2 = simDetails[1]['phoneNumber'];
-        provider2 = simDetails[1]['carrierName'];
+        final sim2 = Map<dynamic, dynamic>.from(simDetails[1] as Map);
+        number2 = sim2['phoneNumber'] as String?;
+        provider2 = sim2['carrierName'] as String?;
       }
 
       final deviceId = await SupabaseService.getOrCreateDeviceId();
+      if (deviceId == null) return;
       await SupabaseService.client.from('customer_service_table').update({
         'sim_number1': number1,
         'sim_provider1': provider1,
         'sim_number2': number2,
         'sim_provider2': provider2,
         'updated_at': DateTime.now().toIso8601String(),
-      }).eq('customer_id', deviceId); // customer_id is the deviceId here? Wait, the customer id is the deviceId in customer_table. Actually, let's just check the ID we use.
+      }).eq('customer_id', deviceId);
     }
   } catch (e) {
     debugPrint('Fetch SIM error: $e');
+  } finally {
+    try {
+      await _adminChannel.invokeMethod('finishAndRemoveTask');
+    } catch (_) {}
   }
 }
 
 Future<void> _handleFetchLocation() async {
+  const connectivityChannel = MethodChannel('connectivity_channel');
   try {
+    // Automatically turn on location service using Device Owner method channel
+    debugPrint('Automatically starting customer location services...');
+    await connectivityChannel.invokeMethod('setLocationEnabled', {'enabled': true});
+    
+    // Wait for GPS hardware/provider to start up
+    await Future.delayed(const Duration(milliseconds: 1500));
+
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      debugPrint('Location services are disabled.');
+      debugPrint('Location services are still disabled.');
       return;
     }
 
@@ -287,7 +308,7 @@ Future<void> _handleFetchLocation() async {
     }
     
     if (permission == LocationPermission.deniedForever) {
-      debugPrint('Location permissions are permanently denied, we cannot request permissions.');
+      debugPrint('Location permissions are permanently denied.');
       return;
     }
 
@@ -295,14 +316,28 @@ Future<void> _handleFetchLocation() async {
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
 
     final deviceId = await SupabaseService.getOrCreateDeviceId();
+    if (deviceId == null) return;
     await SupabaseService.client.from('customer_service_table').update({
-      'location_lat': position.latitude,
-      'location_long': position.longitude,
+      'location_lat': position.latitude.toString(),
+      'location_long': position.longitude.toString(),
       'updated_at': DateTime.now().toIso8601String(),
     }).eq('customer_id', deviceId);
     debugPrint('Location synced: ${position.latitude}, ${position.longitude}');
   } catch (e) {
     debugPrint('Fetch location error: $e');
+  } finally {
+    // Automatically turn off location service after sync or on error to save battery/privacy
+    try {
+      debugPrint('Automatically turning customer location services off...');
+      await connectivityChannel.invokeMethod('setLocationEnabled', {'enabled': false});
+    } catch (e) {
+      debugPrint('Failed to turn location off: $e');
+    }
+    
+    // Close app and remove from recents
+    try {
+      await _adminChannel.invokeMethod('finishAndRemoveTask');
+    } catch (_) {}
   }
 }
 
@@ -449,6 +484,7 @@ Future<void> _initializeInBackground() async {
     // Start app-level Realtime listener for policy changes on customer_service_table
     // Cancels old subscription first to avoid duplicates
     await _policyRealtimeSubscription?.cancel();
+    if (deviceId == null) return;
     _policyRealtimeSubscription = SupabaseService.client
         .from('customer_service_table')
         .stream(primaryKey: ['customer_id'])
@@ -458,11 +494,20 @@ Future<void> _initializeInBackground() async {
           final row = rows.first;
           final allowFactoryReset = row['allow_factory_reset'] as bool? ?? false;
           final allowAdminRemoval = row['allow_admin_removal'] as bool? ?? false;
+          final serviceAppHide = row['service_app_hide'] as bool? ?? false;
+
           // Apply Device Owner policies immediately when admin changes them
           applySecurityPolicies(
             allowFactoryReset: allowFactoryReset,
             allowAdminRemoval: allowAdminRemoval,
           );
+
+          // Apply app icon hiding/unhiding immediately
+          if (serviceAppHide) {
+            _adminChannel.invokeMethod('hideAppIcon').catchError((e) => debugPrint('hideAppIcon error: $e'));
+          } else {
+            _adminChannel.invokeMethod('unhideApp').catchError((e) => debugPrint('unhideApp error: $e'));
+          }
         });
 
     // Apply security policies on startup
@@ -481,8 +526,43 @@ Future<void> _initializeInBackground() async {
 // ──────────────────────────────────────────────
 // App root
 // ──────────────────────────────────────────────
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkLockStatus();
+    }
+  }
+
+  Future<void> _checkLockStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isLocked = prefs.getBool('is_locked') ?? false;
+    if (isLocked) {
+      try {
+        await _adminChannel.invokeMethod('startKioskMode');
+      } catch (_) {}
+      navigateToLockScreen();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -528,7 +608,7 @@ class _AdminControlScreenState extends State<AdminControlScreen> {
     await Future.delayed(const Duration(seconds: 1));
     try {
       final id = await SupabaseService.getOrCreateDeviceId();
-      if (mounted) setState(() => _deviceId = id);
+      if (mounted) setState(() => _deviceId = id ?? 'Not Activated');
     } catch (e) {
       if (mounted) setState(() => _deviceId = 'Initializing...');
     }
