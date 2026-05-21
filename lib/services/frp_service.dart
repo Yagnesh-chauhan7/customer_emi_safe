@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 class FRPService {
   static const MethodChannel _channel = MethodChannel('frp_channel');
@@ -9,6 +10,7 @@ class FRPService {
       final result = await _channel.invokeMethod('enableFRP', {'accounts': accounts});
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -19,6 +21,7 @@ class FRPService {
       final result = await _channel.invokeMethod('disableFRP');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -29,6 +32,7 @@ class FRPService {
       final result = await _channel.invokeMethod('getFRPStatus');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString(), 'status': false};
     }
   }

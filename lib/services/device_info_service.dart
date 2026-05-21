@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class DeviceInfoService {
@@ -8,6 +9,7 @@ class DeviceInfoService {
       final result = await _ch.invokeMethod('getAllInfo');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'error': e.toString()};
     }
   }

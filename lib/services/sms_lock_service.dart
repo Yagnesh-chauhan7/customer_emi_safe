@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 class SmsLockService {
   static const _channel = MethodChannel('sms_lock_channel');
@@ -23,6 +24,7 @@ class SmsLockService {
       await _channel.invokeMethod('setSecretCode', {'code': code});
       return true;
     } catch (e) {
+      debugPrint('Error: $e');
       return false;
     }
   }

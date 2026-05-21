@@ -101,6 +101,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         componentName: component,
       ).launch();
     } catch (e) {
+      debugPrint('Error: $e');
       _showSnack('Could not open settings: $e');
     }
   }
@@ -339,6 +340,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
           package: 'com.android.vending',
         ).launch();
       } catch (e) {
+        debugPrint('Error: $e');
         _showSnack('Play Store not found: $e');
       }
     }
@@ -470,6 +472,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
       await Future.delayed(const Duration(seconds: 2));
       _checkAll();
     } catch (e) {
+      debugPrint('Error: $e');
       _showSnack('Admin request failed: $e');
     }
   }

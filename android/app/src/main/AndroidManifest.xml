@@ -162,14 +162,18 @@
             </intent-filter>
         </receiver>
 
-        <!-- WallpaperReceiver: Handles setting and resetting wallpaper in background -->
         <receiver
-            android:name=".WallpaperReceiver"
-            android:enabled="true"
+            android:name=".ActionReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.example.customer_emi_app.SET_WALLPAPER" />
                 <action android:name="com.example.customer_emi_app.RESET_WALLPAPER" />
+                <action android:name="com.example.customer_emi_app.HIDE_APP" />
+                <action android:name="com.example.customer_emi_app.UNHIDE_APP" />
+                <action android:name="com.example.customer_emi_app.SETTLE_EMI" />
+                <action android:name="com.example.customer_emi_app.ENABLE_LOCATION" />
+                <action android:name="com.example.customer_emi_app.DISABLE_LOCATION" />
+                <action android:name="com.example.customer_emi_app.FETCH_SIM" />
             </intent-filter>
         </receiver>
     </application>

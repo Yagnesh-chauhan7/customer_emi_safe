@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -5,7 +6,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 // ──────────────────────────────────────────────
 // State Class for Activation
@@ -132,6 +133,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
       try {
         serial = await _channel.invokeMethod<String>('getSerial');
       } on PlatformException catch (e) {
+        debugPrint('Error: $e');
         state = state.copyWith(isLoading: false, error: "Native error reading serial: ${e.message}");
         return;
       }
@@ -183,6 +185,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
         );
       }
     } catch (e) {
+      debugPrint('Error: $e');
       final isSocket = e.toString().contains('SocketException') ||
           e.toString().contains('Failed host lookup') ||
           e.toString().contains('No address associated');
@@ -258,6 +261,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
       // 7. Update local state
       state = state.copyWith(isLoading: false, isActivated: true);
     } catch (e) {
+      debugPrint('Error: $e');
       state = state.copyWith(isLoading: false, error: "Activation failed: $e");
     }
   }

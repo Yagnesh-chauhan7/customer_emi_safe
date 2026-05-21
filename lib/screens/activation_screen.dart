@@ -420,6 +420,7 @@ class _ActivationScreenState extends ConsumerState<ActivationScreen> {
         );
       }
     } on PlatformException catch (e) {
+      debugPrint('Error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(

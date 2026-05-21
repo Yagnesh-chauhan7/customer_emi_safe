@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 class ConnectivityService {
   static const MethodChannel _channel = MethodChannel('connectivity_channel');
@@ -11,6 +12,7 @@ class ConnectivityService {
       final result = await _channel.invokeMethod('getWifiStatus');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString(), 'enabled': false};
     }
   }
@@ -22,6 +24,7 @@ class ConnectivityService {
           await _channel.invokeMethod('setWifiEnabled', {'enabled': enabled});
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -34,6 +37,7 @@ class ConnectivityService {
       final result = await _channel.invokeMethod('getMobileDataStatus');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString(), 'enabled': false};
     }
   }
@@ -46,6 +50,7 @@ class ConnectivityService {
           .invokeMethod('setMobileDataEnabled', {'enabled': enabled});
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -58,6 +63,7 @@ class ConnectivityService {
       final result = await _channel.invokeMethod('getBluetoothStatus');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {
         'success': false,
         'error': e.toString(),
@@ -74,6 +80,7 @@ class ConnectivityService {
           .invokeMethod('setBluetoothEnabled', {'enabled': enabled});
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -86,6 +93,7 @@ class ConnectivityService {
       final result = await _channel.invokeMethod('getLocationStatus');
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString(), 'enabled': false};
     }
   }
@@ -97,6 +105,7 @@ class ConnectivityService {
           .invokeMethod('setLocationEnabled', {'enabled': enabled});
       return Map<String, dynamic>.from(result);
     } catch (e) {
+      debugPrint('Error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }

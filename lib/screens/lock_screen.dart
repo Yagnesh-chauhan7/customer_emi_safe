@@ -18,6 +18,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   late AnimationController _glowController;
   late Animation<double> _glowAnimation;
   bool _isQrBlurred = true;
+  String? _wallpaperUrl;
   
   // Static data for demonstration
   final String _upiId = "yagnesh13122003@okaxis";
@@ -36,6 +37,20 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     _glowAnimation = Tween<double>(begin: 0.3, end: 0.8).animate(
       CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
     );
+    _loadWallpaper();
+  }
+
+  Future<void> _loadWallpaper() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _wallpaperUrl = prefs.getString('lock_screen_wallpaper_url');
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading wallpaper: $e');
+    }
   }
 
   @override
@@ -109,19 +124,40 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         body: Stack(
           children: [
             // Deep Layered Background
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFFFFFFFF),
-                    Color(0xFFFEF2F2),
-                    Color(0xFFFEE2E2),
-                  ],
+            if (_wallpaperUrl != null && _wallpaperUrl!.isNotEmpty)
+              Positioned.fill(
+                child: Image.network(
+                  _wallpaperUrl!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0xFFFFFFFF),
+                          Color(0xFFFEF2F2),
+                          Color(0xFFFEE2E2),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            else
+              Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFFFFFFFF),
+                      Color(0xFFFEF2F2),
+                      Color(0xFFFEE2E2),
+                    ],
+                  ),
                 ),
               ),
-            ),
             
             // Abstract Glowing Accents
             Positioned(

@@ -26,6 +26,8 @@ class MainActivity: FlutterActivity() {
     private var isKioskActive = false
     // Prevents infinite loop in onWindowFocusChanged
     private var isBringingToFront = false
+    // Tracks if uninstall should be performed
+    private var shouldPerformUninstall = false
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +69,47 @@ class MainActivity: FlutterActivity() {
         if (intent.getBooleanExtra("stop_kiosk", false)) {
             shouldStopKiosk = true
         }
+        if (intent.getBooleanExtra("perform_uninstall", false)) {
+            shouldPerformUninstall = true
+            intent.removeExtra("perform_uninstall") // prevent re-triggering
+        }
+    }
+
+    private fun performUninstall() {
+        try {
+            val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
+            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
+            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+
+            if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                val restrictions = listOf(
+                    UserManager.DISALLOW_FACTORY_RESET,
+                    UserManager.DISALLOW_SAFE_BOOT,
+                    UserManager.DISALLOW_REMOVE_MANAGED_PROFILE,
+                    UserManager.DISALLOW_UNINSTALL_APPS,
+                    "no_oem_unlock"
+                )
+                for (r in restrictions) {
+                    try { devicePolicyManager.clearUserRestriction(componentName, r) } catch (e: Exception) {}
+                }
+                try { devicePolicyManager.setUninstallBlocked(componentName, packageName, false) } catch (e: Exception) {}
+                
+                devicePolicyManager.clearDeviceOwnerApp(packageName)
+                android.util.Log.d("MainActivity", "Device Owner removed")
+            } else if (devicePolicyManager.isAdminActive(componentName)) {
+                devicePolicyManager.removeActiveAdmin(componentName)
+                android.util.Log.d("MainActivity", "Device Admin removed")
+            }
+
+            val uninstallIntent = Intent(Intent.ACTION_DELETE)
+            uninstallIntent.data = Uri.parse("package:$packageName")
+            uninstallIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            startActivity(uninstallIntent)
+            android.util.Log.d("MainActivity", "Uninstall triggered")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "performUninstall error", e)
+        }
     }
 
     private fun applyKioskPoliciesIfNeeded() {
@@ -107,6 +150,13 @@ class MainActivity: FlutterActivity() {
             } catch (e: Exception) {}
             shouldStopKiosk = false
             finishAndRemoveTask()
+        }
+        if (shouldPerformUninstall) {
+            shouldPerformUninstall = false
+            // Delay slightly to ensure Activity is fully in the foreground
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                performUninstall()
+            }, 500)
         }
     }
 
@@ -341,9 +391,20 @@ class MainActivity: FlutterActivity() {
                         PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                         PackageManager.DONT_KILL_APP
                     )
+                    try {
+                        if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                            val packageInfo = pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+                            packageInfo.requestedPermissions?.forEach { perm ->
+                                try {
+                                    devicePolicyManager.setPermissionGrantState(componentName, packageName, perm, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED)
+                                } catch (e: Exception) {}
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Failed to lock permissions", e)
+                    }
                     result.success(true)
                 }
-                
                 "unhideApp" -> {
                     val pm: PackageManager = applicationContext.packageManager
                     val componentNameAlias = ComponentName(applicationContext, "com.example.customer_emi_app.LauncherAlias")
@@ -352,6 +413,18 @@ class MainActivity: FlutterActivity() {
                         PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                         PackageManager.DONT_KILL_APP
                     )
+                    try {
+                        if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                            val packageInfo = pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+                            packageInfo.requestedPermissions?.forEach { perm ->
+                                try {
+                                    devicePolicyManager.setPermissionGrantState(componentName, packageName, perm, DevicePolicyManager.PERMISSION_GRANT_STATE_DEFAULT)
+                                } catch (e: Exception) {}
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Failed to unlock permissions", e)
+                    }
                     result.success(true)
                 }
 
