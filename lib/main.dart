@@ -19,6 +19,7 @@ import 'screens/activation_screen.dart';
 import 'screens/lock_screen.dart';
 import 'screens/emergency_call_screen.dart';
 import 'services/wallpaper_service.dart';
+import 'screens/splash_screen.dart';
 
 
 // ──────────────────────────────────────────────
@@ -664,7 +665,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         useMaterial3: true,
         scaffoldBackgroundColor: AppColors.background,
       ),
-      home: const PermissionsScreen(),
+      home: const SplashScreen(nextScreen: PermissionsScreen()),
       debugShowCheckedModeBanner: false,
     );
   }

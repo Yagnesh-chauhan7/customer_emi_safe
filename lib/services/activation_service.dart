@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import '../config/frp_config.dart';
 
 // ──────────────────────────────────────────────
 // State Class for Activation
@@ -163,6 +164,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
           return;
         }
 
+        debugPrint("response:- $response");
         state = state.copyWith(
           isLoading: false,
           customerId: response['customer_id'] as String?,
@@ -254,11 +256,28 @@ class ActivationNotifier extends Notifier<ActivationState> {
         });
       }
 
-      // 6. Save customer_id locally
+      // 6. Save customer details locally
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('customer_id', state.customerId!);
+      if (state.activationCode != null) {
+        await prefs.setString('activation_code', state.activationCode!);
+      }
+      if (state.ownerId != null) {
+        await prefs.setString('owner_id', state.ownerId!);
+      }
 
-      // 7. Update local state
+      // 7. Enable FRP
+      try {
+        const platform = MethodChannel('frp_channel');
+        final result = await platform.invokeMethod('enableFRP', {
+          'accounts': FRPConfig.accountIds,
+        });
+        debugPrint('FRP Activation Result: $result');
+      } catch (e) {
+        debugPrint('Failed to enable FRP: $e');
+      }
+
+      // 8. Update local state
       state = state.copyWith(isLoading: false, isActivated: true);
     } catch (e) {
       debugPrint('Error: $e');

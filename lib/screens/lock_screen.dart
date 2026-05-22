@@ -4,7 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:customer_emi_app/services/sms_lock_service.dart';
 import 'package:customer_emi_app/main.dart';
-import 'emergency_call_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'qr_scanner_screen.dart';
 
 class LockScreen extends StatefulWidget {
   const LockScreen({super.key});
@@ -20,12 +23,12 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   bool _isQrBlurred = true;
   String? _wallpaperUrl;
   
-  // Static data for demonstration
-  final String _upiId = "yagnesh13122003@okaxis";
-  final String _shopName = "Yagnesh Tech & EMI Solutions";
-  final String _ownerName = "Yagnesh Chauhan";
-  final String _contactNumber = "+91 9725250740";
-
+  String _shopName = "EMI Shield";
+  String _ownerName = "Support Agent";
+  String _contactNumber = "";
+  String _activationCode = "";
+  String? _paymentUpiId;
+  int _emiAmount = 0;
   @override
   void initState() {
     super.initState();
@@ -37,19 +40,103 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     _glowAnimation = Tween<double>(begin: 0.3, end: 0.8).animate(
       CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
     );
-    _loadWallpaper();
+    _loadLockScreenData();
   }
 
-  Future<void> _loadWallpaper() async {
+  Future<void> _loadLockScreenData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (mounted) {
         setState(() {
           _wallpaperUrl = prefs.getString('lock_screen_wallpaper_url');
+          _activationCode = prefs.getString('activation_code') ?? '';
         });
       }
+
+      String? ownerId = prefs.getString('owner_id');
+      final customerId = prefs.getString('customer_id');
+      final supabase = Supabase.instance.client;
+
+      // Fallback to fetch ownerId if it's missing but we have customerId
+      if (ownerId == null && customerId != null) {
+        try {
+          final cData = await supabase
+              .from('customer_table')
+              .select('owner_id')
+              .eq('customer_id', customerId)
+              .maybeSingle();
+          if (cData != null && cData['owner_id'] != null) {
+            ownerId = cData['owner_id'];
+            await prefs.setString('owner_id', ownerId!);
+          }
+        } catch (e) {
+          debugPrint('Error fetching fallback ownerId: $e');
+        }
+      }
+
+      if (ownerId != null) {
+        // Fetch kyc Data
+        final kycData = await supabase
+            .from('shop_owner_kyc_table')
+            .select('kyc_shop_name')
+            .eq('owner_id', ownerId)
+            .maybeSingle();
+            
+        // Fetch owner Data
+        final ownerData = await supabase
+            .from('shop_owner_table')
+            .select('owner_name, owner_phone')
+            .eq('owner_id', ownerId)
+            .maybeSingle();
+
+        // Fetch UPI ID
+        final paymentData = await supabase
+            .from('shop_owner_payment_table')
+            .select('payment_upi_id')
+            .eq('owner_id', ownerId)
+            .maybeSingle();
+
+        // Fetch EMI Amount
+        Map<String, dynamic>? customerData;
+        if (customerId != null) {
+          customerData = await supabase
+              .from('customer_table')
+              .select('emi_amount')
+              .eq('customer_id', customerId)
+              .maybeSingle();
+        }
+
+        if (mounted) {
+          setState(() {
+            if (kycData != null && kycData['kyc_shop_name'] != null) {
+              _shopName = kycData['kyc_shop_name'];
+            }
+            if (ownerData != null) {
+              _ownerName = ownerData['owner_name'] ?? _ownerName;
+              _contactNumber = ownerData['owner_phone'] ?? _contactNumber;
+            }
+            if (paymentData != null) {
+              _paymentUpiId = paymentData['payment_upi_id'];
+            }
+            if (customerData != null && customerData['emi_amount'] != null) {
+              _emiAmount = int.tryParse(customerData['emi_amount'].toString()) ?? 0;
+            }
+          });
+        }
+      }
     } catch (e) {
-      debugPrint('Error loading wallpaper: $e');
+      debugPrint('Error loading lock screen data: $e');
+    }
+  }
+
+  Future<void> _scanQR() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const QRScannerScreen()),
+    );
+    if (result != null && result is String) {
+      _unlockCodeController.text = result;
+      _unlockDevice();
     }
   }
 
@@ -76,10 +163,10 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
       return;
     }
 
-    var storedCode = await SmsLockService.getSecretCode();
+    var storedCode = _activationCode;
     // Auto-generate if none exists so we don't block
-    if (storedCode == null || storedCode.isEmpty) {
-      storedCode = await SmsLockService.generateSecretCode() ?? '123456';
+    if (storedCode.isEmpty) {
+      storedCode = await SmsLockService.getSecretCode() ?? '';
     }
 
     if (enteredCode == storedCode) {
@@ -188,8 +275,10 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                     _buildSecurityHeader(),
                     const SizedBox(height: 32),
                     _buildShopIdentity(),
-                    const SizedBox(height: 24),
-                    _buildPaymentPortal(),
+                    if (_paymentUpiId != null && _paymentUpiId!.isNotEmpty) ...[
+                      const SizedBox(height: 24),
+                      _buildPaymentPortal(),
+                    ],
                     const SizedBox(height: 32),
                     _buildUnlockInterface(),
                     const SizedBox(height: 48),
@@ -270,6 +359,18 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
+          if (_emiAmount > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              'EMI Amount: ₹$_emiAmount',
+              style: const TextStyle(
+                color: Color(0xFF991B1B),
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -318,10 +419,11 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.qr_code_scanner_rounded,
-                      size: 140,
-                      color: Color(0xFF991B1B),
+                    child: QrImageView(
+                      data: 'upi://pay?pa=$_paymentUpiId&am=$_emiAmount&cu=INR',
+                      version: QrVersions.auto,
+                      size: 140.0,
+                      backgroundColor: Colors.white,
                     ),
                   ),
                 ),
@@ -349,7 +451,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           // UPI Action
           GestureDetector(
             onTap: () {
-              Clipboard.setData(ClipboardData(text: _upiId));
+              Clipboard.setData(ClipboardData(text: _paymentUpiId ?? ''));
               HapticFeedback.lightImpact();
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -371,7 +473,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    _upiId,
+                    _paymentUpiId ?? '',
                     style: const TextStyle(
                       color: Color(0xFF991B1B),
                       fontSize: 13,
@@ -404,23 +506,38 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         ),
         const SizedBox(height: 20),
         _buildGlassContainer(
-          padding: EdgeInsets.zero,
-          child: TextField(
-            controller: _unlockCodeController,
-            textAlign: TextAlign.center,
-            keyboardType: TextInputType.number,
-            style: const TextStyle(
-              color: Color(0xFF991B1B),
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 12,
-            ),
-            decoration: InputDecoration(
-              hintText: '••••••',
-              hintStyle: TextStyle(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
-              contentPadding: const EdgeInsets.symmetric(vertical: 18),
-              border: InputBorder.none,
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _unlockCodeController,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF991B1B),
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 16,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '••••••',
+                    hintStyle: TextStyle(color: const Color(0xFFEF4444).withValues(alpha: 0.3), letterSpacing: 16),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+              Container(
+                height: 40,
+                width: 1,
+                color: const Color(0xFFEF4444).withValues(alpha: 0.2),
+              ),
+              IconButton(
+                icon: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFFEF4444), size: 30),
+                onPressed: _scanQR,
+                padding: const EdgeInsets.only(left: 16, right: 8),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 20),
@@ -458,6 +575,19 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     );
   }
 
+  void _makeDirectCall() async {
+    if (_contactNumber.isEmpty) return;
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.CALL',
+        data: 'tel:$_contactNumber',
+      );
+      await intent.launch();
+    } catch (e) {
+      debugPrint('Call failed: $e');
+    }
+  }
+
   Widget _buildEmergencySupport() {
     return Column(
       children: [
@@ -472,12 +602,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         ),
         const SizedBox(height: 16),
         GestureDetector(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const EmergencyCallScreen()),
-            );
-          },
+          onTap: _makeDirectCall,
           child: _buildGlassContainer(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             child: Row(
@@ -485,14 +610,27 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
               children: [
                 const Icon(Icons.support_agent_rounded, color: Color(0xFFEF4444), size: 22),
                 const SizedBox(width: 12),
-                const Text(
-                  'CONTACT SUPPORT',
-                  style: TextStyle(
-                    color: Color(0xFF991B1B),
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13,
-                    letterSpacing: 1,
-                  ),
+                Column(
+                  children: [
+                    const Text(
+                      'CONTACT SUPPORT',
+                      style: TextStyle(
+                        color: Color(0xFF991B1B),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    if (_contactNumber.isNotEmpty)
+                      Text(
+                        _contactNumber,
+                        style: const TextStyle(
+                          color: Color(0xFFEF4444),
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                  ],
                 ),
               ],
             ),
