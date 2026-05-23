@@ -46,7 +46,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'start_kiosk': true},
+        arguments: {'start_kiosk': true, 'wakeup': true},
         flags: <int>[268435456],
       ).launch();
     } else if (action == 'UNLOCK') {
@@ -85,7 +85,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'wakeup': true},
+        arguments: {'power_off': true},
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'HIDE_APP') {
@@ -94,7 +94,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'wakeup': true},
+        arguments: {'power_off': true},
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'UNHIDE_APP') {
@@ -103,7 +103,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'wakeup': true},
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'SETTLE_EMI') {
@@ -112,7 +111,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'wakeup': true},
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'FETCH_LOCATION') {
@@ -121,7 +119,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         action: 'android.intent.action.MAIN',
         package: 'com.example.customer_emi_app',
         componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'wakeup': true},
+        arguments: {'power_off': true},
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'SET_WALLPAPER') {

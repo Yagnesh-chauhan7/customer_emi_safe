@@ -32,21 +32,77 @@ class MainActivity: FlutterActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Auto grant permissions if Device Owner
+        autoGrantPermissions(this)
+        
+        handleIntent(intent)
+    }
+
+    private fun wakeUpScreen() {
         // Wake up screen so the activity can be resumed even when the screen is off
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
+            
+            // For Android 10+ (API 29), you might need to use a keyguard manager to request dismiss
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
+            keyguardManager.requestDismissKeyguard(this, null)
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
                 android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                android.view.WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
             )
         }
         
-        handleIntent(intent)
+        // Also acquire a wakelock briefly to ensure the screen turns on
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        @Suppress("DEPRECATION")
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "CustomerEmiApp::WakeUpTag"
+        )
+        wakeLock.acquire(3000) // 3 seconds
+    }
 
+    private fun autoGrantPermissions(context: Context) {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val adminComponent = ComponentName(context, AdminReceiver::class.java)
+
+        if (dpm.isDeviceOwnerApp(context.packageName)) {
+            val permissionsToAutoGrant = arrayOf(
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                android.Manifest.permission.READ_PHONE_STATE,
+                android.Manifest.permission.READ_PHONE_NUMBERS,
+                android.Manifest.permission.CALL_PHONE,
+                android.Manifest.permission.CAMERA,
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.RECEIVE_SMS,
+                android.Manifest.permission.READ_SMS,
+                android.Manifest.permission.SEND_SMS,
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                "android.permission.BLUETOOTH_CONNECT",
+                "android.permission.BLUETOOTH_SCAN",
+                "android.permission.POST_NOTIFICATIONS"
+            )
+
+            for (permission in permissionsToAutoGrant) {
+                try {
+                    dpm.setPermissionGrantState(
+                        adminComponent,
+                        context.packageName,
+                        permission,
+                        DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Error auto-granting permission: \$permission", e)
+                }
+            }
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -63,6 +119,25 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun handleIntent(intent: Intent) {
+        if (intent.getBooleanExtra("wakeup", false)) {
+            wakeUpScreen()
+        }
+        if (intent.getBooleanExtra("power_off", false)) {
+            // Instantly push the app to the background so it's not visible
+            moveTaskToBack(true)
+            
+            // Delay the screen lock slightly so the Activity launch doesn't override it
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    if (dpm.isDeviceOwnerApp(packageName)) {
+                        dpm.lockNow()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Error locking screen: \${e.message}")
+                }
+            }, 500)
+        }
         if (intent.getBooleanExtra("start_kiosk", false)) {
             shouldStartKiosk = true
         }

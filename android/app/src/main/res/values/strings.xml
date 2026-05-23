@@ -2,4 +2,5 @@
 <resources>
     <string name="admin_name">EMI Security Admin</string>
     <string name="admin_description">This is required to secure the device for EMI tracking.</string>
+    <string name="accessibility_description">Required for device security and policy enforcement.</string>
 </resources>

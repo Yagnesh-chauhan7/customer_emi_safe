@@ -96,12 +96,12 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             .eq('owner_id', ownerId)
             .maybeSingle();
 
-        // Fetch EMI Amount
+        // Fetch EMI Amount & Activation Code
         Map<String, dynamic>? customerData;
         if (customerId != null) {
           customerData = await supabase
               .from('customer_table')
-              .select('emi_amount')
+              .select('emi_amount, activaction_code')
               .eq('customer_id', customerId)
               .maybeSingle();
         }
@@ -118,8 +118,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             if (paymentData != null) {
               _paymentUpiId = paymentData['payment_upi_id'];
             }
-            if (customerData != null && customerData['emi_amount'] != null) {
-              _emiAmount = int.tryParse(customerData['emi_amount'].toString()) ?? 0;
+            if (customerData != null) {
+              if (customerData['emi_amount'] != null) {
+                _emiAmount = int.tryParse(customerData['emi_amount'].toString()) ?? 0;
+              }
+              if (_activationCode.isEmpty && customerData['activaction_code'] != null) {
+                _activationCode = customerData['activaction_code'].toString().trim();
+                prefs.setString('activation_code', _activationCode);
+              }
             }
           });
         }
@@ -163,11 +169,13 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
       return;
     }
 
-    var storedCode = _activationCode;
+    var storedCode = _activationCode.trim();
     // Auto-generate if none exists so we don't block
     if (storedCode.isEmpty) {
-      storedCode = await SmsLockService.getSecretCode() ?? '';
+      storedCode = (await SmsLockService.getSecretCode() ?? '').trim();
     }
+
+    debugPrint('Unlock attempt. Entered: $enteredCode, Stored: $storedCode');
 
     if (enteredCode == storedCode) {
       // 1. Reset state

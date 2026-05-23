@@ -67,6 +67,12 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   late final List<_PermItem> _systemPerms;
   late final List<_PermItem> _devicePerms;
 
+  bool get _allGranted {
+    if (_loading) return false;
+    final allItems = [..._runtimePerms, ..._systemPerms, ..._devicePerms];
+    return allItems.every((item) => item.state == _PermState.granted || item.state == _PermState.notApplicable);
+  }
+
   static const _adminChannel = MethodChannel('com.example.customer_emi_app/admin');
 
   @override
@@ -214,15 +220,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         color: const Color(0xFF76FF03),
         type: _PermType.system,
         permissions: [Permission.ignoreBatteryOptimizations],
-      ),
-      _PermItem(
-        id: 'accessibility',
-        title: 'Accessibility Service',
-        description: 'Required for advanced device monitoring and control features',
-        icon: Icons.accessibility_new_rounded,
-        color: const Color(0xFF40C4FF),
-        type: _PermType.system,
-        openAction: () => _openSettings('android.settings.ACCESSIBILITY_SETTINGS'),
       ),
       _PermItem(
         id: 'device_admin',
@@ -663,14 +660,14 @@ class _PermissionsScreenState extends State<PermissionsScreen>
       ),
       child: SafeArea(
         child: ElevatedButton(
-          onPressed: () {
+          onPressed: _allGranted ? () {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const DeviceInfoScreen()),
             );
-          },
+          } : null,
           style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.primary,
+            backgroundColor: _allGranted ? AppColors.primary : Colors.grey,
             foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(vertical: 16),
             shape: RoundedRectangleBorder(
@@ -678,15 +675,15 @@ class _PermissionsScreenState extends State<PermissionsScreen>
             ),
             elevation: 0,
           ),
-          child: const Row(
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                'Next: Device Information',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                _allGranted ? 'Next: Device Information' : 'Grant All Permissions First',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
-              SizedBox(width: 8),
-              Icon(Icons.arrow_forward_rounded, size: 20),
+              const SizedBox(width: 8),
+              if (_allGranted) const Icon(Icons.arrow_forward_rounded, size: 20),
             ],
           ),
         ),

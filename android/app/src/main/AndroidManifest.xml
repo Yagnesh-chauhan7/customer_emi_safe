@@ -176,6 +176,7 @@
                 <action android:name="com.example.customer_emi_app.FETCH_SIM" />
             </intent-filter>
         </receiver>
+
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
