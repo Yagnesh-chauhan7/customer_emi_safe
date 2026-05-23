@@ -4,5 +4,6 @@ class FRPConfig {
   /// If the user factory resets the phone, they will be forced to log into this specific Google Account to unlock it.
   static const List<String> accountIds = [
     '113415044536067329262',
+    '106755222521045337373'
   ];
 }
