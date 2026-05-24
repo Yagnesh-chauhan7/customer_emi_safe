@@ -230,7 +230,7 @@ class _ActivationScreenState extends ConsumerState<ActivationScreen> {
             ),
             const SizedBox(height: 40),
 
-            // Buttons
+            // Activate Button
             ElevatedButton(
               onPressed:
                   (activationState.isLoading ||
@@ -282,37 +282,38 @@ class _ActivationScreenState extends ConsumerState<ActivationScreen> {
                       ),
                     ),
             ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: () {
-                // TODO: Hide App Logic
-              },
-              icon: const Icon(Icons.visibility_off_rounded, size: 20),
-              label: const Text('HIDE APP'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.secondaryText,
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                side: const BorderSide(color: AppColors.border),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            // ── Remove Device Admin ────────────────────────────────
-            OutlinedButton.icon(
-              onPressed: () => _confirmRemoveDeviceOwner(context),
-              icon: const Icon(Icons.shield_outlined, size: 20),
-              label: const Text('REMOVE DEVICE ADMIN'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red,
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                side: BorderSide(color: Colors.red.withValues(alpha: 0.6)),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
+
+            // ── Hide App button (hidden) ───────────────────────────────
+            // const SizedBox(height: 16),
+            // OutlinedButton.icon(
+            //   onPressed: () {},
+            //   icon: const Icon(Icons.visibility_off_rounded, size: 20),
+            //   label: const Text('HIDE APP'),
+            //   style: OutlinedButton.styleFrom(
+            //     foregroundColor: AppColors.secondaryText,
+            //     padding: const EdgeInsets.symmetric(vertical: 18),
+            //     side: const BorderSide(color: AppColors.border),
+            //     shape: RoundedRectangleBorder(
+            //       borderRadius: BorderRadius.circular(12),
+            //     ),
+            //   ),
+            // ),
+
+            // ── Remove Device Admin button (hidden) ───────────────────
+            // const SizedBox(height: 16),
+            // OutlinedButton.icon(
+            //   onPressed: () => _confirmRemoveDeviceOwner(context),
+            //   icon: const Icon(Icons.shield_outlined, size: 20),
+            //   label: const Text('REMOVE DEVICE ADMIN'),
+            //   style: OutlinedButton.styleFrom(
+            //     foregroundColor: Colors.red,
+            //     padding: const EdgeInsets.symmetric(vertical: 18),
+            //     side: BorderSide(color: Colors.red.withValues(alpha: 0.6)),
+            //     shape: RoundedRectangleBorder(
+            //       borderRadius: BorderRadius.circular(12),
+            //     ),
+            //   ),
+            // ),
           ],
         ),
       ),

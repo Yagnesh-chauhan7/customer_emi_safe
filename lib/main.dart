@@ -137,6 +137,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       } catch (e) {
         debugPrint('Background resetWallpaper error: $e');
       }
+    } else if (action == 'APP_UPDATE') {
+      await prefs.setBool('action_app_update', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'power_off': true},
+        flags: <int>[268435456, 67108864],
+      ).launch();
     }
   } catch (e) {
     debugPrint('Background FCM error: $e');
@@ -444,6 +453,25 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
         try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
       }
       break;
+    case 'APP_UPDATE':
+      try {
+        final response = await SupabaseService.client
+            .from('customer_app_versions')
+            .select('app_url, version')
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+            
+        if (response != null && response['app_url'] != null) {
+          final version = response['version'] ?? 'Unknown';
+          await _adminChannel.invokeMethod('silentUpdate', {'url': response['app_url'], 'version': version});
+        } else {
+          debugPrint('APP_UPDATE error: No APK URL found in DB');
+        }
+      } catch (e) {
+        debugPrint('silentUpdate error: $e');
+      }
+      break;
     default:
       debugPrint('Unknown FCM action: $action');
   }
@@ -547,6 +575,39 @@ Future<void> _initializeInBackground() async {
     } finally {
       try { await _adminChannel.invokeMethod('finishAndRemoveTask'); } catch (_) {}
     }
+  }
+  if (prefs.getBool('action_app_update') == true) {
+    await prefs.remove('action_app_update');
+    try {
+      final response = await SupabaseService.client
+          .from('customer_app_versions')
+          .select('app_url, version')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+          
+      if (response != null && response['app_url'] != null) {
+        final version = response['version'] ?? 'Unknown';
+        await _adminChannel.invokeMethod('silentUpdate', {'url': response['app_url'], 'version': version});
+      } else {
+        debugPrint('Background silentUpdate error: No APK URL found in DB');
+      }
+    } catch (e) {
+      debugPrint('Background silentUpdate error: $e');
+    }
+  }
+
+  try {
+    _adminChannel.setMethodCallHandler((call) async {
+      if (call.method == 'logUpdateProgress') {
+        final progress = call.arguments['progress'];
+        final status = call.arguments['status'];
+        final version = call.arguments['version'];
+        debugPrint('🟢 SILENT UPDATE LOG | Version: $version | Status: $status | Progress: $progress%');
+      }
+    });
+  } catch (e) {
+    debugPrint('Error setting method call handler: $e');
   }
 
   // FCM setup

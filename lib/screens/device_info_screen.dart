@@ -6,6 +6,9 @@ import 'package:barcode_widget/barcode_widget.dart';
 import 'activation_screen.dart';
 import '../services/device_info_service.dart';
 import '../theme/app_colors.dart';
+import '../services/update_service.dart';
+import '../widgets/update_dialog.dart';
+import '../config/app_constants.dart';
 
 class DeviceInfoScreen extends StatefulWidget {
   const DeviceInfoScreen({super.key});
@@ -241,6 +244,51 @@ class _DeviceInfoScreenState extends State<DeviceInfoScreen> {
           const SizedBox(height: 8),
           _buildDeviceBuildCard(),
           const SizedBox(height: 24),
+          
+          ElevatedButton.icon(
+            onPressed: () async {
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => const Center(child: CircularProgressIndicator()),
+              );
+              final updateInfo = await UpdateService.checkForUpdate();
+              if (mounted) {
+                Navigator.pop(context); // Close loading
+                if (updateInfo != null) {
+                  UpdateDialog.show(context, updateInfo);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('App is up to date!')),
+                  );
+                }
+              }
+            },
+            icon: const Icon(Icons.system_update_rounded),
+            label: const Text('Check for Updates'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.card,
+              foregroundColor: AppColors.mainText,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: AppColors.border),
+              ),
+              elevation: 0,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: Text(
+              'App Version: ${AppConstants.currentAppVersion}',
+              style: const TextStyle(
+                color: AppColors.secondaryText,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(height: 32),
         ],
       ),
     );

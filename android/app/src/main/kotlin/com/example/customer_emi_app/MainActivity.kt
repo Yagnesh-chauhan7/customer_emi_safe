@@ -11,6 +11,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.os.UserManager
+import android.app.PendingIntent
+import android.content.pm.PackageInstaller
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
@@ -147,6 +155,15 @@ class MainActivity: FlutterActivity() {
         if (intent.getBooleanExtra("perform_uninstall", false)) {
             shouldPerformUninstall = true
             intent.removeExtra("perform_uninstall") // prevent re-triggering
+        }
+        if (intent.getBooleanExtra("update_complete", false)) {
+            // App was just updated silently — stop kiosk, close and remove from recents
+            android.util.Log.d("MainActivity", "✅ Update complete. Closing silently and removing from recents.")
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try { stopLockTask() } catch (_: Exception) {}
+                moveTaskToBack(true)
+                finishAndRemoveTask()
+            }, 500)
         }
     }
 
@@ -597,6 +614,186 @@ class MainActivity: FlutterActivity() {
                         result.success(true)
                     } catch (e: Exception) {
                         result.error("ERROR", e.message, null)
+                    }
+                }
+
+                "silentUpdate" -> {
+                    val urlString = call.argument<String>("url")
+                    val versionStr = call.argument<String>("version") ?: "Unknown"
+                    if (urlString.isNullOrEmpty()) {
+                        result.error("INVALID_URL", "App URL is empty", null)
+                        return@setMethodCallHandler
+                    }
+                    if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                        result.error("NOT_DEVICE_OWNER", "App must be device owner to perform silent update", null)
+                        return@setMethodCallHandler
+                    }
+                    
+                    result.success(true) // Return early so Dart isn't blocked
+                    
+                    thread {
+                        val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                        val logToDart = { status: String, progress: Int ->
+                            uiHandler.post {
+                                try {
+                                    MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL)
+                                        .invokeMethod("logUpdateProgress", mapOf(
+                                            "status" to status,
+                                            "progress" to progress,
+                                            "version" to versionStr
+                                        ))
+                                } catch (e: Exception) {}
+                            }
+                        }
+                        
+                        try {
+                            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                val channel = NotificationChannel("update_channel", "App Updates", NotificationManager.IMPORTANCE_LOW)
+                                notificationManager.createNotificationChannel(channel)
+                            }
+                            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                android.app.Notification.Builder(applicationContext, "update_channel")
+                            } else {
+                                android.app.Notification.Builder(applicationContext)
+                            }
+                            builder.setSmallIcon(android.R.drawable.stat_sys_download)
+                                .setContentTitle("Downloading App Update")
+                                .setContentText("Connecting...")
+                                .setProgress(100, 0, true)
+                                .setOngoing(true)
+                            notificationManager.notify(999, builder.build())
+                            
+                            var url = URL(urlString)
+                            var connection: HttpURLConnection
+                            var redirectCount = 0
+                            
+                            while (true) {
+                                connection = url.openConnection() as HttpURLConnection
+                                connection.requestMethod = "GET"
+                                connection.setRequestProperty("Accept-Encoding", "identity")
+                                connection.setRequestProperty("Connection", "close")
+                                connection.instanceFollowRedirects = false
+                                connection.connect()
+                                
+                                val status = connection.responseCode
+                                if (status == HttpURLConnection.HTTP_MOVED_TEMP ||
+                                    status == HttpURLConnection.HTTP_MOVED_PERM ||
+                                    status == HttpURLConnection.HTTP_SEE_OTHER ||
+                                    status == 307 || status == 308) {
+                                    
+                                    val newUrl = connection.getHeaderField("Location")
+                                    connection.disconnect()
+                                    if (newUrl == null) {
+                                        android.util.Log.e("MainActivity", "Redirect location is null")
+                                        return@thread
+                                    }
+                                    url = URL(newUrl)
+                                    redirectCount++
+                                    if (redirectCount > 5) {
+                                        android.util.Log.e("MainActivity", "Too many redirects")
+                                        return@thread
+                                    }
+                                } else {
+                                    break
+                                }
+                            }
+                            
+                            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                                android.util.Log.e("MainActivity", "Server returned HTTP ${connection.responseCode} ${connection.responseMessage}")
+                                return@thread
+                            }
+                            
+                            val totalSize = connection.contentLength
+                            val apkFile = File(applicationContext.cacheDir, "update.apk")
+                            val input = connection.inputStream
+                            val output = FileOutputStream(apkFile)
+                            
+                            val data = ByteArray(4096)
+                            var count: Int
+                            var downloadedSize = 0L
+                            var lastProgress = -1
+                            var lastMbLogged = -1L
+                            
+                            while (input.read(data).also { count = it } != -1) {
+                                output.write(data, 0, count)
+                                downloadedSize += count
+                                if (totalSize > 0) {
+                                    val progress = ((downloadedSize * 100) / totalSize).toInt()
+                                    if (progress > lastProgress) {
+                                        builder.setProgress(100, progress, false)
+                                        builder.setContentText("$progress% downloaded")
+                                        notificationManager.notify(999, builder.build())
+                                        lastProgress = progress
+                                    }
+                                } else {
+                                    // Unknown size, just log megabytes
+                                    val mbDownloaded = downloadedSize / (1024 * 1024)
+                                    if (mbDownloaded > lastMbLogged) {
+                                        builder.setProgress(100, 0, true)
+                                        builder.setContentText("$mbDownloaded MB downloaded")
+                                        notificationManager.notify(999, builder.build())
+                                        lastMbLogged = mbDownloaded
+                                    }
+                                }
+                            }
+                            output.flush()
+                            output.close()
+                            input.close()
+                            
+                            builder.setContentTitle("Installing Update...")
+                            builder.setProgress(0, 0, true)
+                            builder.setContentText("Please wait")
+                            notificationManager.notify(999, builder.build())
+                            
+                            val packageInstaller = packageManager.packageInstaller
+                            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                            params.setAppPackageName(packageName)
+                            val sessionId = packageInstaller.createSession(params)
+                            val session = packageInstaller.openSession(sessionId)
+                            
+                            val out = session.openWrite("package", 0, apkFile.length())
+                            val apkStream = FileInputStream(apkFile)
+                            val buffer = ByteArray(65536)
+                            var c: Int
+                            while (apkStream.read(buffer).also { c = it } != -1) {
+                                out.write(buffer, 0, c)
+                            }
+                            session.fsync(out)
+                            apkStream.close()
+                            out.close()
+                            
+                            val intent = Intent("com.example.customer_emi_app.UPDATE_STATUS")
+                            val pendingIntent = PendingIntent.getBroadcast(
+                                applicationContext,
+                                0,
+                                intent,
+                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                            )
+                            logToDart("Setup Initialized Successfully", 100)
+                            session.commit(pendingIntent.intentSender)
+                            
+                            builder.setContentTitle("Update Downloaded")
+                            builder.setContentText("Waiting for Android to install...")
+                            builder.setProgress(0, 0, false)
+                            builder.setOngoing(false)
+                            notificationManager.notify(999, builder.build())
+                            
+                        } catch (e: Exception) {
+                            logToDart("Failed: ${e.message}", 0)
+                            android.util.Log.e("MainActivity", "Silent Update Failed", e)
+                            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                android.app.Notification.Builder(applicationContext, "update_channel")
+                            } else {
+                                android.app.Notification.Builder(applicationContext)
+                            }
+                            builder.setSmallIcon(android.R.drawable.stat_notify_error)
+                                .setContentTitle("Update Failed")
+                                .setContentText(e.message)
+                                .setOngoing(false)
+                            notificationManager.notify(999, builder.build())
+                        }
                     }
                 }
 
