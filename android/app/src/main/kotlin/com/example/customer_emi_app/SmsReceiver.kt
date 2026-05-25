@@ -12,14 +12,17 @@ class SmsReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "SmsReceiver"
 
-        // SMS command format:
-        //   LOCK  → "EMI_LOCK#<secretCode>"
-        //   UNLOCK → "EMI_UNLOCK#<secretCode>"
-        const val LOCK_PREFIX   = "EMI_LOCK#"
-        const val UNLOCK_PREFIX = "EMI_UNLOCK#"
+        // New encrypted SMS command format:
+        // EMI_CMD|<Base64_Encrypted_Payload>
+        const val CMD_PREFIX = "EMI_CMD|"
 
-        const val PREFS_NAME    = "emi_sms_prefs"
-        const val KEY_SECRET    = "sms_secret_code"
+        const val PREFS_NAME       = "emi_sms_prefs"
+        const val KEY_AES_SECRET   = "sms_aes_key"
+        const val KEY_LAST_TIME    = "sms_last_timestamp"
+        
+        // Allowed clock skew / replay window (in seconds)
+        // 5 minutes = 300 seconds
+        const val MAX_AGE_SECONDS = 300L
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -34,22 +37,83 @@ class SmsReceiver : BroadcastReceiver() {
             val body   = sms.messageBody?.trim() ?: continue
             val sender = sms.originatingAddress ?: "unknown"
 
-            Log.d(TAG, "SMS received from $sender: $body")
+            // Check if it's our encrypted command prefix
+            if (!body.startsWith(CMD_PREFIX)) {
+                continue // Not an EMI command, let it pass to default SMS app
+            }
 
-            val prefs      = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val secretCode = prefs.getString(KEY_SECRET, null) ?: continue
+            Log.d(TAG, "Encrypted SMS received from $sender")
 
-            when {
-                body == "$LOCK_PREFIX$secretCode" -> {
-                    Log.d(TAG, "🔒 SMS LOCK command received from $sender")
+            // Abort broadcast so it doesn't show up in the default SMS app (stealth mode)
+            abortBroadcast()
+
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val secretKey = prefs.getString(KEY_AES_SECRET, null)
+            val storedDeviceId = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                                        .getString("flutter.customer_id", null)
+
+            if (secretKey.isNullOrEmpty() || storedDeviceId.isNullOrEmpty()) {
+                Log.e(TAG, "Missing AES key or Customer ID. Cannot process offline SMS.")
+                continue
+            }
+
+            // Extract Base64 part
+            val base64Ciphertext = body.substring(CMD_PREFIX.length)
+
+            // Decrypt
+            val decryptedPlaintext = SmsCommandCrypto.decrypt(base64Ciphertext, secretKey)
+            if (decryptedPlaintext == null) {
+                Log.e(TAG, "SMS Decryption failed or invalid key.")
+                continue
+            }
+
+            // Payload format: COMMAND|TIMESTAMP|CUSTOMER_ID
+            // e.g., LOCK|1716617400|uuid-1234
+            val parts = decryptedPlaintext.split("|")
+            if (parts.size != 3) {
+                Log.e(TAG, "Invalid decrypted payload format: $decryptedPlaintext")
+                continue
+            }
+
+            val command = parts[0]
+            val timestampStr = parts[1]
+            val targetDeviceId = parts[2]
+
+            // 1. Validate Target Device ID
+            if (targetDeviceId != storedDeviceId) {
+                Log.e(TAG, "Device ID mismatch. Expected $storedDeviceId, got $targetDeviceId")
+                continue
+            }
+
+            // 2. Validate Timestamp (Replay Protection)
+            val msgTimestamp = timestampStr.toLongOrNull() ?: 0L
+            val currentTimestamp = System.currentTimeMillis() / 1000L
+            val lastTimestamp = prefs.getLong(KEY_LAST_TIME, 0L)
+
+            if (msgTimestamp <= lastTimestamp) {
+                Log.e(TAG, "Replay attack detected: Timestamp $msgTimestamp is <= last used $lastTimestamp")
+                continue
+            }
+            if (currentTimestamp - msgTimestamp > MAX_AGE_SECONDS) {
+                Log.e(TAG, "SMS expired: Timestamp $msgTimestamp is older than 5 minutes")
+                continue
+            }
+
+            // All validations passed! Update last used timestamp.
+            prefs.edit().putLong(KEY_LAST_TIME, msgTimestamp).apply()
+
+            // 3. Execute Command
+            when (command) {
+                "LOCK" -> {
+                    Log.d(TAG, "🔒 Encrypted SMS LOCK command accepted")
                     triggerLock(context)
                 }
-                body == "$UNLOCK_PREFIX$secretCode" -> {
-                    Log.d(TAG, "🔓 SMS UNLOCK command received from $sender")
+                "UNLOCK" -> {
+                    Log.d(TAG, "🔓 Encrypted SMS UNLOCK command accepted")
                     triggerUnlock(context)
                 }
                 else -> {
-                    Log.d(TAG, "SMS does not match EMI command format — ignored")
+                    Log.e(TAG, "Unknown command in SMS: $command")
                 }
             }
         }

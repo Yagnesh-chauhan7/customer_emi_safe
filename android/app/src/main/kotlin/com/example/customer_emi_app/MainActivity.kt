@@ -36,6 +36,10 @@ class MainActivity: FlutterActivity() {
     private var isBringingToFront = false
     // Tracks if uninstall should be performed
     private var shouldPerformUninstall = false
+    // Prevents onWindowFocusChanged from re-locking during SMS/FCM unlock sequence
+    private var isUnlocking = false
+    // Flutter engine reference — used to call back into Dart (native → Flutter events)
+    private var activeFlutterEngine: FlutterEngine? = null
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -125,6 +129,36 @@ class MainActivity: FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+        // CRITICAL: When the app is already in kiosk mode (RESUMED on screen),
+        // onResume() will NOT fire again after onNewIntent.
+        // So we must process unlock/lock immediately here.
+        if (shouldStopKiosk) {
+            // Try to route through Flutter (mirrors online FCM unlock exactly)
+            val notifiedFlutter = notifyFlutterUnlock()
+            if (!notifiedFlutter) {
+                // Fallback: handle in native if Flutter engine not ready
+                processUnlockNow()
+            }
+        }
+        if (shouldStartKiosk) {
+            processLockNow()
+        }
+    }
+
+    // Sends 'smsUnlock' event to Flutter so it runs handleLockAction('UNLOCK')
+    // Returns true if Flutter was successfully notified, false if fallback is needed
+    private fun notifyFlutterUnlock(): Boolean {
+        val engine = activeFlutterEngine ?: return false
+        return try {
+            android.util.Log.d("MainActivity", "Notifying Flutter to run handleLockAction(UNLOCK)")
+            MethodChannel(engine.dartExecutor.binaryMessenger, "emi_native_events")
+                .invokeMethod("smsUnlock", null)
+            shouldStopKiosk = false
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to notify Flutter for unlock: ${e.message}")
+            false
+        }
     }
 
     private fun handleIntent(intent: Intent) {
@@ -150,8 +184,9 @@ class MainActivity: FlutterActivity() {
         if (intent.getBooleanExtra("start_kiosk", false)) {
             shouldStartKiosk = true
         }
-        if (intent.getBooleanExtra("stop_kiosk", false)) {
+        if (intent.getBooleanExtra("stop_kiosk", false) || intent.getBooleanExtra("sms_unlock", false)) {
             shouldStopKiosk = true
+            android.util.Log.d("MainActivity", "Unlock intent received — shouldStopKiosk=true")
         }
         if (intent.getBooleanExtra("perform_uninstall", false)) {
             shouldPerformUninstall = true
@@ -226,27 +261,55 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    // Called when SMS/FCM LOCK command arrives while app is fresh starting (via onCreate path)
+    private fun processLockNow() {
+        if (!shouldStartKiosk) return
+        android.util.Log.d("MainActivity", "processLockNow() called")
+        try {
+            applyKioskPoliciesIfNeeded()
+            startLockTask()
+            isKioskActive = true
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error starting lock task: ${e.message}")
+        }
+        shouldStartKiosk = false
+    }
+
+    // Called when SMS/FCM UNLOCK command arrives.
+    // Works whether app is fresh-started OR already in foreground kiosk mode.
+    private fun processUnlockNow() {
+        if (!shouldStopKiosk) return
+        android.util.Log.d("MainActivity", "processUnlockNow() called — stopping kiosk and closing app")
+        isUnlocking = true  // Block onWindowFocusChanged from re-locking during unlock
+        try {
+            stopLockTask()
+            isKioskActive = false
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error stopping lock task: ${e.message}")
+        }
+        shouldStopKiosk = false
+
+        // 800ms delay gives Android time to fully exit lock task mode before finishing
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            android.util.Log.d("MainActivity", "Closing app and removing from recents after unlock")
+            isUnlocking = false
+            moveTaskToBack(true)
+            finishAndRemoveTask()
+        }, 800)
+    }
+
     override fun onResume() {
         super.onResume()
+        // These flags are set in handleIntent (called from onCreate)
+        // and processed here once the activity is fully resumed
         if (shouldStartKiosk) {
-            try {
-                applyKioskPoliciesIfNeeded()
-                startLockTask()
-                isKioskActive = true
-            } catch (e: Exception) {}
-            shouldStartKiosk = false
+            processLockNow()
         }
         if (shouldStopKiosk) {
-            try {
-                stopLockTask()
-                isKioskActive = false
-            } catch (e: Exception) {}
-            shouldStopKiosk = false
-            finishAndRemoveTask()
+            processUnlockNow()
         }
         if (shouldPerformUninstall) {
             shouldPerformUninstall = false
-            // Delay slightly to ensure Activity is fully in the foreground
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 performUninstall()
             }, 500)
@@ -255,11 +318,13 @@ class MainActivity: FlutterActivity() {
 
     // FIX 2: Re-enter foreground when Recent Apps or status bar is opened.
     // Uses isBringingToFront flag to prevent infinite callback loop.
+    // isUnlocking flag prevents re-lock during SMS/FCM unlock sequence.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             isBringingToFront = false // reset when we regain focus
-        } else if (isKioskActive && !isBringingToFront) {
+        } else if (isKioskActive && !isBringingToFront && !isUnlocking) {
+            // Only re-enter kiosk if we are NOT in the middle of an unlock
             isBringingToFront = true
             val bringBack = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -270,7 +335,13 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Store engine reference for native→Flutter calls (e.g. SMS unlock events)
+        activeFlutterEngine = flutterEngine
 
+        // ── Native → Flutter event channel ───────────────────────
+        // Allows Kotlin to call into Dart to trigger handleLockAction
+        // This makes offline SMS unlock follow the SAME flow as online FCM unlock
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "emi_native_events").setMethodCallHandler { _, _ -> }
         val frpManager = FRPManager(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "frp_channel").setMethodCallHandler { call, result ->
             when (call.method) {
@@ -310,28 +381,22 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        // ── SMS Lock Channel ──────────────────────────────────────
+        // ── SMS Lock Channel ─────────────────────────────────────
         val smsPrefs = getSharedPreferences(SmsReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sms_lock_channel").setMethodCallHandler { call, result ->
             when (call.method) {
-                "getSecretCode" -> {
-                    val code = smsPrefs.getString(SmsReceiver.KEY_SECRET, null)
-                    result.success(code)
+                "getSmsKey" -> {
+                    val key = smsPrefs.getString(SmsReceiver.KEY_AES_SECRET, null)
+                    result.success(key)
                 }
-                "setSecretCode" -> {
-                    val code = call.argument<String>("code") ?: ""
-                    if (code.length < 4) {
-                        result.error("INVALID", "Secret code must be at least 4 characters.", null)
+                "saveSmsKey" -> {
+                    val key = call.argument<String>("key") ?: ""
+                    if (key.length != 32) {
+                        result.error("INVALID", "AES key must be exactly 32 characters.", null)
                     } else {
-                        smsPrefs.edit().putString(SmsReceiver.KEY_SECRET, code).apply()
+                        smsPrefs.edit().putString(SmsReceiver.KEY_AES_SECRET, key).apply()
                         result.success(true)
                     }
-                }
-                "generateSecretCode" -> {
-                    // Generate a random 6-digit code
-                    val code = (100000..999999).random().toString()
-                    smsPrefs.edit().putString(SmsReceiver.KEY_SECRET, code).apply()
-                    result.success(code)
                 }
                 else -> result.notImplemented()
             }
@@ -800,6 +865,7 @@ class MainActivity: FlutterActivity() {
             }
         }
     }
+
     private fun enforceCoreSecurityPolicies() {
         try {
             val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager

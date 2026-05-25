@@ -610,6 +610,23 @@ Future<void> _initializeInBackground() async {
     debugPrint('Error setting method call handler: $e');
   }
 
+  // ── Native → Flutter event channel (SMS offline commands) ──────────────
+  // Kotlin calls smsUnlock / smsLock on this channel when an SMS command
+  // arrives. This makes offline SMS unlock follow the SAME flow as online
+  // FCM unlock (handleLockAction), ensuring identical behaviour.
+  try {
+    const MethodChannel('emi_native_events').setMethodCallHandler((call) async {
+      debugPrint('📲 emi_native_events received: ${call.method}');
+      if (call.method == 'smsUnlock') {
+        await handleLockAction('UNLOCK');
+      } else if (call.method == 'smsLock') {
+        await handleLockAction('LOCK');
+      }
+    });
+  } catch (e) {
+    debugPrint('Error setting emi_native_events handler: $e');
+  }
+
   // FCM setup
   try {
     final messaging = FirebaseMessaging.instance;
