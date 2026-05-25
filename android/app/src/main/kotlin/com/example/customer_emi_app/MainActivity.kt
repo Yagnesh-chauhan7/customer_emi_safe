@@ -40,8 +40,9 @@ class MainActivity: FlutterActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Auto grant permissions if Device Owner
-        autoGrantPermissions(this)
+        // Enforce core security policies unconditionally on startup if Device Owner
+        enforceCoreSecurityPolicies()
+        // autoGrantPermissions(this)
         
         handleIntent(intent)
     }
@@ -77,7 +78,7 @@ class MainActivity: FlutterActivity() {
 
     private fun autoGrantPermissions(context: Context) {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminComponent = ComponentName(context, AdminReceiver::class.java)
+        val adminComponent = ComponentName(context, MyDeviceAdminReceiver::class.java)
 
         if (dpm.isDeviceOwnerApp(context.packageName)) {
             val permissionsToAutoGrant = arrayOf(
@@ -170,9 +171,9 @@ class MainActivity: FlutterActivity() {
     private fun performUninstall() {
         try {
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
-            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
-            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+            
+            
+            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
                 val restrictions = listOf(
@@ -207,9 +208,9 @@ class MainActivity: FlutterActivity() {
     private fun applyKioskPoliciesIfNeeded() {
         try {
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
-            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
-            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+            
+            
+            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
                 devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
@@ -352,9 +353,9 @@ class MainActivity: FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
-            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
-            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+            
+            
+            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             when (call.method) {
                 "isAdminActive" -> {
@@ -434,12 +435,8 @@ class MainActivity: FlutterActivity() {
                                     devicePolicyManager.addUserRestriction(componentName, "no_oem_unlock")
                                 } catch (_: Exception) {}
                             } else {
-                                // ALLOW (admin granted permission)
-                                devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_FACTORY_RESET)
-                                devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_SAFE_BOOT)
-                                try {
-                                    devicePolicyManager.clearUserRestriction(componentName, "no_oem_unlock")
-                                } catch (_: Exception) {}
+                                // Do nothing. We intentionally ignore requests to ALLOW factory reset,
+                                // because factory reset must remain permanently blocked while the app is Device Owner.
                             }
                             result.success(true)
                         } else {
@@ -801,6 +798,26 @@ class MainActivity: FlutterActivity() {
                     result.notImplemented()
                 }
             }
+        }
+    }
+    private fun enforceCoreSecurityPolicies() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val adminComponent = ComponentName(this, MyDeviceAdminReceiver::class.java)
+
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                // Unconditionally block factory reset, safe boot, and OEM unlock
+                dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_FACTORY_RESET)
+                dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_SAFE_BOOT)
+                try {
+                    dpm.addUserRestriction(adminComponent, "no_oem_unlock")
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "OEM Unlock restriction not supported", e)
+                }
+                android.util.Log.d("MainActivity", "Core security policies (Factory Reset & OEM Unlock block) enforced on startup")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error enforcing core security policies", e)
         }
     }
 }

@@ -71,7 +71,7 @@ class ActionReceiver : BroadcastReceiver() {
     private fun lockAllPermissions(context: Context) {
         try {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-            val adminComponentName = ComponentName(context, AdminReceiver::class.java)
+            val adminComponentName = ComponentName(context, MyDeviceAdminReceiver::class.java)
             if (dpm.isDeviceOwnerApp(context.packageName)) {
                 val packageInfo = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
                 packageInfo.requestedPermissions?.forEach { perm ->
@@ -86,7 +86,7 @@ class ActionReceiver : BroadcastReceiver() {
     private fun unlockAllPermissions(context: Context) {
         try {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-            val adminComponentName = ComponentName(context, AdminReceiver::class.java)
+            val adminComponentName = ComponentName(context, MyDeviceAdminReceiver::class.java)
             if (dpm.isDeviceOwnerApp(context.packageName)) {
                 val packageInfo = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
                 packageInfo.requestedPermissions?.forEach { perm ->
