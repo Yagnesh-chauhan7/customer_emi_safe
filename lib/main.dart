@@ -472,6 +472,40 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
         debugPrint('silentUpdate error: $e');
       }
       break;
+    // ── Connectivity Controls ──────────────────────────────────────────
+    case 'SET_WIFI':
+      try {
+        const connectivityChannel = MethodChannel('connectivity_channel');
+        final enabled = data['enabled'];
+        final isEnabled = enabled == true || enabled == 'true';
+        await connectivityChannel.invokeMethod('setWifiEnabled', {'enabled': isEnabled});
+        debugPrint('WiFi set to: $isEnabled');
+      } catch (e) {
+        debugPrint('SET_WIFI error: $e');
+      }
+      break;
+    case 'SET_INTERNET':
+      try {
+        const connectivityChannel = MethodChannel('connectivity_channel');
+        final enabled = data['enabled'];
+        final isEnabled = enabled == true || enabled == 'true';
+        await connectivityChannel.invokeMethod('setMobileDataEnabled', {'enabled': isEnabled});
+        debugPrint('Mobile data set to: $isEnabled');
+      } catch (e) {
+        debugPrint('SET_INTERNET error: $e');
+      }
+      break;
+    case 'SET_BLUETOOTH':
+      try {
+        const connectivityChannel = MethodChannel('connectivity_channel');
+        final enabled = data['enabled'];
+        final isEnabled = enabled == true || enabled == 'true';
+        await connectivityChannel.invokeMethod('setBluetoothEnabled', {'enabled': isEnabled});
+        debugPrint('Bluetooth set to: $isEnabled');
+      } catch (e) {
+        debugPrint('SET_BLUETOOTH error: $e');
+      }
+      break;
     default:
       debugPrint('Unknown FCM action: $action');
   }
@@ -608,6 +642,23 @@ Future<void> _initializeInBackground() async {
     });
   } catch (e) {
     debugPrint('Error setting method call handler: $e');
+  }
+
+  // ── Native → Flutter event channel (SMS offline commands) ──────────────
+  // Kotlin calls smsUnlock / smsLock on this channel when an SMS command
+  // arrives. This makes offline SMS unlock follow the SAME flow as online
+  // FCM unlock (handleLockAction), ensuring identical behaviour.
+  try {
+    const MethodChannel('emi_native_events').setMethodCallHandler((call) async {
+      debugPrint('📲 emi_native_events received: ${call.method}');
+      if (call.method == 'smsUnlock') {
+        await handleLockAction('UNLOCK');
+      } else if (call.method == 'smsLock') {
+        await handleLockAction('LOCK');
+      }
+    });
+  } catch (e) {
+    debugPrint('Error setting emi_native_events handler: $e');
   }
 
   // FCM setup

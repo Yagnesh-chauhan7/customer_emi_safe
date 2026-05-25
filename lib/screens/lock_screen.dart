@@ -170,11 +170,6 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     }
 
     var storedCode = _activationCode.trim();
-    // Auto-generate if none exists so we don't block
-    if (storedCode.isEmpty) {
-      storedCode = (await SmsLockService.getSecretCode() ?? '').trim();
-    }
-
     debugPrint('Unlock attempt. Entered: $enteredCode, Stored: $storedCode');
 
     if (enteredCode == storedCode) {

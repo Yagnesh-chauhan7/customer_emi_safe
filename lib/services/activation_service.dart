@@ -7,7 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:math';
 import '../config/frp_config.dart';
+import 'sms_lock_service.dart';
 
 // ──────────────────────────────────────────────
 // State Class for Activation
@@ -233,7 +235,7 @@ class ActivationNotifier extends Notifier<ActivationState> {
         fcmToken = await FirebaseMessaging.instance.getToken();
       } catch (_) {}
 
-      // 4. Update customer_table
+      // 4. Update customer_table with FCM token
       await _supabase
           .from('customer_table')
           .update({
@@ -241,6 +243,31 @@ class ActivationNotifier extends Notifier<ActivationState> {
             if (fcmToken != null) 'fcm_token': fcmToken,
           })
           .eq('customer_id', state.customerId!);
+
+      // 4.5 Ensure SMS AES Key exists
+      final customerData = await _supabase
+          .from('customer_table')
+          .select('sms_aes_key')
+          .eq('customer_id', state.customerId!)
+          .maybeSingle();
+
+      String? existingAesKey = customerData?['sms_aes_key'] as String?;
+      if (existingAesKey == null || existingAesKey.length != 32) {
+        // Generate a random 32-character string
+        const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        final random = Random.secure();
+        existingAesKey = String.fromCharCodes(Iterable.generate(
+            32, (_) => chars.codeUnitAt(random.nextInt(chars.length))));
+
+        // Save to Supabase
+        await _supabase
+            .from('customer_table')
+            .update({'sms_aes_key': existingAesKey})
+            .eq('customer_id', state.customerId!);
+      }
+
+      // Save to Native SharedPreferences for SmsReceiver to use offline
+      await SmsLockService.saveSmsKey(existingAesKey);
 
       // 5. Initialize customer_service_table
       final existingService = await _supabase
