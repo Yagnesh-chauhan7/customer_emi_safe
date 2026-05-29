@@ -23,13 +23,21 @@ class SupabaseService {
       // Try to recover customer_id using device serial
       try {
         const channel = MethodChannel('device_info_channel');
-        final serial = await channel.invokeMethod<String>('getSerial');
-        if (serial != null && serial.isNotEmpty && !serial.contains("Permission") && !serial.contains("Unavailable")) {
-          final response = await client
+        final imeiList = await channel.invokeMethod<List<dynamic>>('getImeiList');
+        if (imeiList != null && imeiList.isNotEmpty) {
+          final String imei1 = imeiList[0].toString();
+          final String? imei2 = imeiList.length > 1 ? imeiList[1].toString() : null;
+          
+          var query = client
               .from('customer_table')
               .select('customer_id')
-              .eq('customer_serial', serial)
-              .maybeSingle();
+              .eq('customer_imei1', imei1);
+              
+          if (imei2 != null && imei2.isNotEmpty) {
+             query = query.eq('customer_imei2', imei2);
+          }
+          
+          final response = await query.maybeSingle();
           if (response != null) {
             customerId = response['customer_id'] as String?;
             if (customerId != null) {

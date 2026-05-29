@@ -124,44 +124,52 @@ class ActivationNotifier extends Notifier<ActivationState> {
         return;
       }
 
-      // ── Step 2: Request phone permission & read Serial Number ──────────────
+      // ── Step 2: Request phone permission & read IMEI ──────────────
       final permissionStatus = await Permission.phone.request();
       if (!permissionStatus.isGranted) {
         state = state.copyWith(isLoading: false, error: "Phone permission denied.");
         return;
       }
 
-      // Read Serial Number using native method channel
-      String? serial;
+      // Read IMEI list using native method channel
+      List<dynamic>? imeiList;
       try {
-        serial = await _channel.invokeMethod<String>('getSerial');
+        imeiList = await _channel.invokeMethod<List<dynamic>>('getImeiList');
       } on PlatformException catch (e) {
         debugPrint('Error: $e');
-        state = state.copyWith(isLoading: false, error: "Native error reading serial: ${e.message}");
+        state = state.copyWith(isLoading: false, error: "Native error reading IMEI: ${e.message}");
         return;
       }
 
-      if (serial == null || serial.isEmpty || serial.contains("Permission required") || serial.contains("Unavailable")) {
-        state = state.copyWith(isLoading: false, error: "Could not read Serial Number ($serial).");
+      if (imeiList == null || imeiList.isEmpty) {
+        state = state.copyWith(isLoading: false, error: "Could not read IMEI numbers.");
         return;
       }
+
+      String imei1 = imeiList[0].toString();
+      String? imei2 = imeiList.length > 1 ? imeiList[1].toString() : null;
 
       // ── Step 3: Query Supabase ─────────────────────────────────────────────
       try {
-        final response = await _supabase
+        var query = _supabase
             .from('customer_table')
             .select(
               'customer_id, owner_id, customer_name, customer_phone, customer_email, '
               'customer_imei1, customer_imei2, customer_serial, '
               'activaction_code, is_device_active',
             )
-            .eq('customer_serial', serial)
-            .maybeSingle();
+            .eq('customer_imei1', imei1);
+
+        if (imei2 != null && imei2.isNotEmpty) {
+          query = query.eq('customer_imei2', imei2);
+        }
+
+        final response = await query.maybeSingle();
 
         if (response == null) {
           state = state.copyWith(
             isLoading: false,
-            error: "No customer found for this device's Serial Number ($serial).",
+            error: "No customer found for this device's IMEI ($imei1${imei2 != null ? ', $imei2' : ''}).",
           );
           return;
         }
