@@ -2,11 +2,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:customer_emi_app/services/sms_lock_service.dart';
 import 'package:customer_emi_app/main.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:customer_emi_app/services/connectivity_service.dart';
 import 'qr_scanner_screen.dart';
 
 class LockScreen extends StatefulWidget {
@@ -591,11 +591,26 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     }
   }
 
+  Future<void> _openWifiSettings() async {
+    HapticFeedback.lightImpact();
+    final success = await ConnectivityService.openWifiSettings();
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Could not open WiFi settings'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFEF4444),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+    }
+  }
+
   Widget _buildEmergencySupport() {
     return Column(
       children: [
         const Text(
-          'DIRECT ASSISTANCE',
+          'DIRECT ASSISTANCE & UTILITIES',
           style: TextStyle(
             color: Color(0xFFEF4444),
             fontSize: 10,
@@ -604,40 +619,83 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           ),
         ),
         const SizedBox(height: 16),
-        GestureDetector(
-          onTap: _makeDirectCall,
-          child: _buildGlassContainer(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.support_agent_rounded, color: Color(0xFFEF4444), size: 22),
-                const SizedBox(width: 12),
-                Column(
+        Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          alignment: WrapAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: _makeDirectCall,
+              child: _buildGlassContainer(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      'CONTACT SUPPORT',
-                      style: TextStyle(
-                        color: Color(0xFF991B1B),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                    if (_contactNumber.isNotEmpty)
-                      Text(
-                        _contactNumber,
-                        style: const TextStyle(
-                          color: Color(0xFFEF4444),
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                    const Icon(Icons.support_agent_rounded, color: Color(0xFFEF4444), size: 22),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'CONTACT SUPPORT',
+                          style: TextStyle(
+                            color: Color(0xFF991B1B),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                            letterSpacing: 1,
+                          ),
                         ),
-                      ),
+                        if (_contactNumber.isNotEmpty)
+                          Text(
+                            _contactNumber,
+                            style: const TextStyle(
+                              color: Color(0xFFEF4444),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                      ],
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
-          ),
+            GestureDetector(
+              onTap: _openWifiSettings,
+              child: _buildGlassContainer(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.wifi_rounded, color: Color(0xFFEF4444), size: 22),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'CONNECT WIFI',
+                          style: TextStyle(
+                            color: Color(0xFF991B1B),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        const Text(
+                          'Configure settings',
+                          style: TextStyle(
+                            color: Color(0xFFEF4444),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );

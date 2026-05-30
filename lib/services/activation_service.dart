@@ -140,9 +140,11 @@ class ActivationNotifier extends Notifier<ActivationState> {
         state = state.copyWith(isLoading: false, error: "Native error reading serial: ${e.message}");
         return;
       }
+      print("serial ==> ${serial}");
 
       if (serial == null || serial.isEmpty || serial.contains("Permission required") || serial.contains("Unavailable")) {
         state = state.copyWith(isLoading: false, error: "Could not read Serial Number ($serial).");
+
         return;
       }
 

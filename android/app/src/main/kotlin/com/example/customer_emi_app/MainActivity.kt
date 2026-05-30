@@ -8,7 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.wifi.WifiConfiguration
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
+import android.os.Handler
 import android.os.PowerManager
 import android.os.UserManager
 import android.app.PendingIntent
@@ -38,6 +42,8 @@ class MainActivity: FlutterActivity() {
     private var shouldPerformUninstall = false
     // Prevents onWindowFocusChanged from re-locking during SMS/FCM unlock sequence
     private var isUnlocking = false
+    // Prevents onWindowFocusChanged from re-locking when launching WiFi settings
+    private var isOpeningSettings = false
     // Flutter engine reference — used to call back into Dart (native → Flutter events)
     private var activeFlutterEngine: FlutterEngine? = null
 
@@ -248,7 +254,20 @@ class MainActivity: FlutterActivity() {
             val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
-                devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
+                devicePolicyManager.setLockTaskPackages(
+                    componentName, 
+                    arrayOf(
+                        packageName, 
+                        "com.android.settings", 
+                        "com.google.android.settings",
+                        "com.samsung.android.settings",
+                        "com.oppo.settings",
+                        "com.vivo.settings",
+                        "com.huawei.android.settings",
+                        "com.miui.settings",
+                        "com.coloros.settings"
+                    )
+                )
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                     devicePolicyManager.setLockTaskFeatures(
                         componentName,
@@ -323,8 +342,16 @@ class MainActivity: FlutterActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             isBringingToFront = false // reset when we regain focus
-        } else if (isKioskActive && !isBringingToFront && !isUnlocking) {
-            // Only re-enter kiosk if we are NOT in the middle of an unlock
+            isOpeningSettings = false // reset when we regain focus
+            if (isKioskActive) {
+                try {
+                    startLockTask()
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Error restarting lock task on focus gain: ${e.message}")
+                }
+            }
+        } else if (isKioskActive && !isBringingToFront && !isUnlocking && !isOpeningSettings) {
+            // Only re-enter kiosk if we are NOT in the middle of an unlock and not opening settings
             isBringingToFront = true
             val bringBack = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -376,6 +403,78 @@ class MainActivity: FlutterActivity() {
                 // Location
                 "setLocationEnabled"  -> result.success(connectivityMgr.setLocationEnabled(call.argument<Boolean>("enabled") ?: false))
                 "getLocationStatus"   -> result.success(connectivityMgr.getLocationStatus())
+
+
+                // Open Android system WiFi settings page directly.
+                // Works in kiosk mode because com.android.settings is whitelisted
+                // in setLockTaskPackages(). Bypasses custom WiFi screen entirely.
+                "openWifiSettings" -> {
+                    isOpeningSettings = true
+                    val settingsPackages = arrayOf(
+                        "com.android.settings",
+                        "com.google.android.settings",
+                        "com.samsung.android.settings",
+                        "com.oppo.settings",
+                        "com.vivo.settings",
+                        "com.huawei.android.settings",
+                        "com.miui.settings",
+                        "com.coloros.settings"
+                    )
+                    var opened = false
+                    
+                    // 1. Try explicit packages first (prevents implicit intent blocking in LockTask)
+                    for (pkg in settingsPackages) {
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+                                setPackage(pkg)
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
+                            opened = true
+                            android.util.Log.d("MainActivity", "Successfully opened settings for package: $pkg")
+                            break
+                        } catch (e: Exception) {
+                            // Try next package
+                        }
+                    }
+                    
+                    // 2. Try implicit if explicit didn't work
+                    if (!opened) {
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
+                            opened = true
+                            android.util.Log.d("MainActivity", "Successfully opened settings via implicit intent")
+                        } catch (e: Exception) {
+                            android.util.Log.w("MainActivity", "Implicit settings open failed: ${e.message}")
+                        }
+                    }
+                    
+                    // 3. Ultimate Kiosk Fallback: temporarily stopLockTask, start settings, and re-lock when user returns
+                    if (!opened) {
+                        try {
+                            android.util.Log.i("MainActivity", "All standard paths failed. Using stopLockTask fallback...")
+                            stopLockTask()
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
+                            opened = true
+                            android.util.Log.i("MainActivity", "Opened settings after stopLockTask fallback")
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "stopLockTask fallback failed: ${e.message}")
+                        }
+                    }
+                    
+                    if (opened) {
+                        result.success(true)
+                    } else {
+                        isOpeningSettings = false
+                        result.error("OPEN_FAILED", "Could not open WiFi settings page", null)
+                    }
+                }
 
                 else -> result.notImplemented()
             }
@@ -442,7 +541,20 @@ class MainActivity: FlutterActivity() {
                     try {
                         if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
                             // Whitelist our app for Lock Task (True Kiosk)
-                            devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
+                             devicePolicyManager.setLockTaskPackages(
+                                 componentName, 
+                                 arrayOf(
+                                     packageName, 
+                                     "com.android.settings", 
+                                     "com.google.android.settings",
+                                     "com.samsung.android.settings",
+                                     "com.oppo.settings",
+                                     "com.vivo.settings",
+                                     "com.huawei.android.settings",
+                                     "com.miui.settings",
+                                     "com.coloros.settings"
+                                 )
+                             )
                             // STRICT: Disable Home, Recents, Back, Status Bar, Global Actions
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                                 devicePolicyManager.setLockTaskFeatures(
