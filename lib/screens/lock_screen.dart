@@ -4,10 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:customer_emi_app/main.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:android_intent_plus/android_intent.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:customer_emi_app/services/connectivity_service.dart';
 import 'qr_scanner_screen.dart';
+import 'package:customer_emi_app/screens/emergency_call_screen.dart';
 
 class LockScreen extends StatefulWidget {
   const LockScreen({super.key});
@@ -301,29 +301,45 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(22),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: const Color(0xFFEF4444).withValues(alpha: 0.08),
             border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.3), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                color: const Color(0xFFEF4444).withValues(alpha: 0.12),
                 blurRadius: 40,
                 spreadRadius: 2,
               ),
             ],
           ),
-          child: const Icon(Icons.security_rounded, color: Color(0xFFEF4444), size: 42),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(Icons.shield_rounded, color: const Color(0xFFEF4444).withValues(alpha: 0.2), size: 48),
+              const Icon(Icons.security_rounded, color: Color(0xFFEF4444), size: 36),
+            ],
+          ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         const Text(
-          'DEVICE RESTRICTED',
+          'EMI SHIELD',
+          style: TextStyle(
+            color: Color(0xFF991B1B),
+            fontWeight: FontWeight.w900,
+            letterSpacing: 6,
+            fontSize: 24,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Device Security & Protection',
           style: TextStyle(
             color: Color(0xFFEF4444),
-            fontWeight: FontWeight.w900,
-            letterSpacing: 4,
-            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2,
+            fontSize: 10,
           ),
         ),
       ],
@@ -345,14 +361,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(Icons.verified_user_outlined, size: 14, color: Color(0xFFEF4444)),
               const SizedBox(width: 6),
               Text(
-                _ownerName,
+                'Owner: $_ownerName',
                 style: const TextStyle(
                   color: Color(0xFFEF4444),
                   fontSize: 13,
@@ -362,14 +378,35 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          if (_emiAmount > 0) ...[
+          if (_contactNumber.isNotEmpty) ...[
             const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.phone_rounded, size: 14, color: Color(0xFFEF4444)),
+                const SizedBox(width: 6),
+                Text(
+                  'Support: $_contactNumber',
+                  style: const TextStyle(
+                    color: Color(0xFFEF4444),
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (_emiAmount > 0) ...[
+            const SizedBox(height: 10),
+            Divider(color: const Color(0xFFEF4444).withValues(alpha: 0.15), height: 1),
+            const SizedBox(height: 10),
             Text(
               'EMI Amount: ₹$_emiAmount',
               style: const TextStyle(
                 color: Color(0xFF991B1B),
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
               ),
             ),
@@ -578,17 +615,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     );
   }
 
-  void _makeDirectCall() async {
-    if (_contactNumber.isEmpty) return;
-    try {
-      final intent = AndroidIntent(
-        action: 'android.intent.action.CALL',
-        data: 'tel:$_contactNumber',
-      );
-      await intent.launch();
-    } catch (e) {
-      debugPrint('Call failed: $e');
-    }
+  Future<void> _openEmergencyDialer() async {
+    HapticFeedback.lightImpact();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EmergencyCallScreen(supportNumber: _contactNumber),
+      ),
+    );
   }
 
   Future<void> _openWifiSettings() async {
@@ -625,19 +659,19 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           alignment: WrapAlignment.center,
           children: [
             GestureDetector(
-              onTap: _makeDirectCall,
+              onTap: _openEmergencyDialer,
               child: _buildGlassContainer(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.support_agent_rounded, color: Color(0xFFEF4444), size: 22),
+                    const Icon(Icons.phone_enabled_rounded, color: Color(0xFFEF4444), size: 22),
                     const SizedBox(width: 12),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'CONTACT SUPPORT',
+                          'EMERGENCY CALL',
                           style: TextStyle(
                             color: Color(0xFF991B1B),
                             fontWeight: FontWeight.w900,
@@ -645,15 +679,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                             letterSpacing: 1,
                           ),
                         ),
-                        if (_contactNumber.isNotEmpty)
-                          Text(
-                            _contactNumber,
-                            style: const TextStyle(
-                              color: Color(0xFFEF4444),
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
+                        const Text(
+                          'Dialer services',
+                          style: TextStyle(
+                            color: Color(0xFFEF4444),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
                           ),
+                        ),
                       ],
                     ),
                   ],
