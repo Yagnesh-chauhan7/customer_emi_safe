@@ -30,6 +30,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   String _activationCode = "";
   String? _paymentUpiId;
   int _emiAmount = 0;
+  bool _isQrView = false;
   @override
   void initState() {
     super.initState();
@@ -94,7 +95,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         // Fetch UPI ID
         final paymentData = await supabase
             .from('shop_owner_payment_table')
-            .select('payment_upi_id')
+            .select('payment_upi_id, is_qr_view')
             .eq('owner_id', ownerId)
             .maybeSingle();
 
@@ -120,6 +121,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             }
             if (paymentData != null) {
               _paymentUpiId = paymentData['payment_upi_id'];
+              _isQrView = (paymentData['is_qr_view'] as bool?) ?? false;
             }
             if (customerData != null) {
               if (customerData['emi_amount'] != null) {
@@ -281,7 +283,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                     _buildSecurityHeader(),
                     const SizedBox(height: 32),
                     _buildShopIdentity(),
-                    if (_paymentUpiId != null && _paymentUpiId!.isNotEmpty) ...[
+                    if (_paymentUpiId != null && _paymentUpiId!.isNotEmpty && _isQrView) ...[
                       const SizedBox(height: 24),
                       _buildPaymentPortal(),
                     ],
