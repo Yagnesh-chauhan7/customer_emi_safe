@@ -8,7 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.wifi.WifiConfiguration
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
+import android.os.Handler
 import android.os.PowerManager
 import android.os.UserManager
 import android.app.PendingIntent
@@ -36,11 +40,19 @@ class MainActivity: FlutterActivity() {
     private var isBringingToFront = false
     // Tracks if uninstall should be performed
     private var shouldPerformUninstall = false
+    // Prevents onWindowFocusChanged from re-locking during SMS/FCM unlock sequence
+    private var isUnlocking = false
+    // Prevents onWindowFocusChanged from re-locking when launching WiFi settings
+    private var isOpeningSettings = false
+    // Flutter engine reference — used to call back into Dart (native → Flutter events)
+    private var activeFlutterEngine: FlutterEngine? = null
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Auto grant permissions if Device Owner
+        // Enforce core security policies unconditionally on startup if Device Owner
+        enforceCoreSecurityPolicies()
+        // Auto-grant critical permissions as Device Owner (CALL_PHONE etc.)
         autoGrantPermissions(this)
         
         handleIntent(intent)
@@ -77,7 +89,7 @@ class MainActivity: FlutterActivity() {
 
     private fun autoGrantPermissions(context: Context) {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminComponent = ComponentName(context, AdminReceiver::class.java)
+        val adminComponent = ComponentName(context, MyDeviceAdminReceiver::class.java)
 
         if (dpm.isDeviceOwnerApp(context.packageName)) {
             val permissionsToAutoGrant = arrayOf(
@@ -124,6 +136,36 @@ class MainActivity: FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+        // CRITICAL: When the app is already in kiosk mode (RESUMED on screen),
+        // onResume() will NOT fire again after onNewIntent.
+        // So we must process unlock/lock immediately here.
+        if (shouldStopKiosk) {
+            // Try to route through Flutter (mirrors online FCM unlock exactly)
+            val notifiedFlutter = notifyFlutterUnlock()
+            if (!notifiedFlutter) {
+                // Fallback: handle in native if Flutter engine not ready
+                processUnlockNow()
+            }
+        }
+        if (shouldStartKiosk) {
+            processLockNow()
+        }
+    }
+
+    // Sends 'smsUnlock' event to Flutter so it runs handleLockAction('UNLOCK')
+    // Returns true if Flutter was successfully notified, false if fallback is needed
+    private fun notifyFlutterUnlock(): Boolean {
+        val engine = activeFlutterEngine ?: return false
+        return try {
+            android.util.Log.d("MainActivity", "Notifying Flutter to run handleLockAction(UNLOCK)")
+            MethodChannel(engine.dartExecutor.binaryMessenger, "emi_native_events")
+                .invokeMethod("smsUnlock", null)
+            shouldStopKiosk = false
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to notify Flutter for unlock: ${e.message}")
+            false
+        }
     }
 
     private fun handleIntent(intent: Intent) {
@@ -149,8 +191,9 @@ class MainActivity: FlutterActivity() {
         if (intent.getBooleanExtra("start_kiosk", false)) {
             shouldStartKiosk = true
         }
-        if (intent.getBooleanExtra("stop_kiosk", false)) {
+        if (intent.getBooleanExtra("stop_kiosk", false) || intent.getBooleanExtra("sms_unlock", false)) {
             shouldStopKiosk = true
+            android.util.Log.d("MainActivity", "Unlock intent received — shouldStopKiosk=true")
         }
         if (intent.getBooleanExtra("perform_uninstall", false)) {
             shouldPerformUninstall = true
@@ -170,9 +213,9 @@ class MainActivity: FlutterActivity() {
     private fun performUninstall() {
         try {
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
-            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
-            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+            
+            
+            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
                 val restrictions = listOf(
@@ -207,12 +250,51 @@ class MainActivity: FlutterActivity() {
     private fun applyKioskPoliciesIfNeeded() {
         try {
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
-            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
-            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
-                devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
+                // ── Auto-grant CALL_PHONE so ACTION_CALL works without user prompt ──
+                // Device Owner can grant dangerous permissions silently.
+                // Without this, ACTION_CALL throws SecurityException in release builds.
+                try {
+                    devicePolicyManager.setPermissionGrantState(
+                        componentName,
+                        packageName,
+                        android.Manifest.permission.CALL_PHONE,
+                        DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                    )
+                    android.util.Log.d("MainActivity", "CALL_PHONE permission auto-granted via Device Owner")
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Failed to auto-grant CALL_PHONE: ${e.message}")
+                }
+
+                // ── Whitelist ONLY our app + system settings ──
+                // Dialer/Contacts apps are NOT whitelisted — calls go via ACTION_CALL directly
+                // so the user never gets access to the system dialer UI or contacts list.
+                devicePolicyManager.setLockTaskPackages(
+                    componentName, 
+                    arrayOf(
+                        packageName,
+                        // Settings (needed for WiFi configuration)
+                        "com.android.settings", 
+                        "com.google.android.settings",
+                        "com.samsung.android.settings",
+                        "com.oppo.settings",
+                        "com.vivo.settings",
+                        "com.huawei.android.settings",
+                        "com.miui.settings",
+                        "com.coloros.settings",
+                        // Dialer apps (needed for emergency calls from lock screen)
+                        "com.android.dialer",
+                        "com.google.android.dialer",
+                        "com.samsung.android.dialer",
+                        "com.coloros.dialer",
+                        "com.oppo.dialer",
+                        "com.miui.dialer",
+                        "com.vivo.dialer",
+                        "com.android.phone"
+                    )
+                )
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                     devicePolicyManager.setLockTaskFeatures(
                         componentName,
@@ -221,31 +303,59 @@ class MainActivity: FlutterActivity() {
                 }
             }
         } catch (e: Exception) {
-            // Ignore policy errors gracefully
+            android.util.Log.e("MainActivity", "applyKioskPoliciesIfNeeded error: ${e.message}")
         }
+    }
+
+    // Called when SMS/FCM LOCK command arrives while app is fresh starting (via onCreate path)
+    private fun processLockNow() {
+        if (!shouldStartKiosk) return
+        android.util.Log.d("MainActivity", "processLockNow() called")
+        try {
+            applyKioskPoliciesIfNeeded()
+            startLockTask()
+            isKioskActive = true
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error starting lock task: ${e.message}")
+        }
+        shouldStartKiosk = false
+    }
+
+    // Called when SMS/FCM UNLOCK command arrives.
+    // Works whether app is fresh-started OR already in foreground kiosk mode.
+    private fun processUnlockNow() {
+        if (!shouldStopKiosk) return
+        android.util.Log.d("MainActivity", "processUnlockNow() called — stopping kiosk and closing app")
+        isUnlocking = true  // Block onWindowFocusChanged from re-locking during unlock
+        try {
+            stopLockTask()
+            isKioskActive = false
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error stopping lock task: ${e.message}")
+        }
+        shouldStopKiosk = false
+
+        // 800ms delay gives Android time to fully exit lock task mode before finishing
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            android.util.Log.d("MainActivity", "Closing app and removing from recents after unlock")
+            isUnlocking = false
+            moveTaskToBack(true)
+            finishAndRemoveTask()
+        }, 800)
     }
 
     override fun onResume() {
         super.onResume()
+        // These flags are set in handleIntent (called from onCreate)
+        // and processed here once the activity is fully resumed
         if (shouldStartKiosk) {
-            try {
-                applyKioskPoliciesIfNeeded()
-                startLockTask()
-                isKioskActive = true
-            } catch (e: Exception) {}
-            shouldStartKiosk = false
+            processLockNow()
         }
         if (shouldStopKiosk) {
-            try {
-                stopLockTask()
-                isKioskActive = false
-            } catch (e: Exception) {}
-            shouldStopKiosk = false
-            finishAndRemoveTask()
+            processUnlockNow()
         }
         if (shouldPerformUninstall) {
             shouldPerformUninstall = false
-            // Delay slightly to ensure Activity is fully in the foreground
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 performUninstall()
             }, 500)
@@ -254,11 +364,21 @@ class MainActivity: FlutterActivity() {
 
     // FIX 2: Re-enter foreground when Recent Apps or status bar is opened.
     // Uses isBringingToFront flag to prevent infinite callback loop.
+    // isUnlocking flag prevents re-lock during SMS/FCM unlock sequence.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             isBringingToFront = false // reset when we regain focus
-        } else if (isKioskActive && !isBringingToFront) {
+            isOpeningSettings = false // reset when we regain focus
+            if (isKioskActive) {
+                try {
+                    startLockTask()
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Error restarting lock task on focus gain: ${e.message}")
+                }
+            }
+        } else if (isKioskActive && !isBringingToFront && !isUnlocking && !isOpeningSettings) {
+            // Only re-enter kiosk if we are NOT in the middle of an unlock and not opening settings
             isBringingToFront = true
             val bringBack = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -269,7 +389,13 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Store engine reference for native→Flutter calls (e.g. SMS unlock events)
+        activeFlutterEngine = flutterEngine
 
+        // ── Native → Flutter event channel ───────────────────────
+        // Allows Kotlin to call into Dart to trigger handleLockAction
+        // This makes offline SMS unlock follow the SAME flow as online FCM unlock
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "emi_native_events").setMethodCallHandler { _, _ -> }
         val frpManager = FRPManager(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "frp_channel").setMethodCallHandler { call, result ->
             when (call.method) {
@@ -305,32 +431,191 @@ class MainActivity: FlutterActivity() {
                 "setLocationEnabled"  -> result.success(connectivityMgr.setLocationEnabled(call.argument<Boolean>("enabled") ?: false))
                 "getLocationStatus"   -> result.success(connectivityMgr.getLocationStatus())
 
+
+                // Open Android system WiFi settings page directly.
+                // Works in kiosk mode because com.android.settings is whitelisted
+                // in setLockTaskPackages(). Bypasses custom WiFi screen entirely.
+                "openWifiSettings" -> {
+                    isOpeningSettings = true
+                    val settingsPackages = arrayOf(
+                        "com.android.settings",
+                        "com.google.android.settings",
+                        "com.samsung.android.settings",
+                        "com.oppo.settings",
+                        "com.vivo.settings",
+                        "com.huawei.android.settings",
+                        "com.miui.settings",
+                        "com.coloros.settings"
+                    )
+                    var opened = false
+                    
+                    // 1. Try explicit packages first (prevents implicit intent blocking in LockTask)
+                    for (pkg in settingsPackages) {
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+                                setPackage(pkg)
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
+                            opened = true
+                            android.util.Log.d("MainActivity", "Successfully opened settings for package: $pkg")
+                            break
+                        } catch (e: Exception) {
+                            // Try next package
+                        }
+                    }
+                    
+                    // 2. Try implicit if explicit didn't work
+                    if (!opened) {
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
+                            opened = true
+                            android.util.Log.d("MainActivity", "Successfully opened settings via implicit intent")
+                        } catch (e: Exception) {
+                            android.util.Log.w("MainActivity", "Implicit settings open failed: ${e.message}")
+                        }
+                    }
+                    
+                    // 3. Ultimate Kiosk Fallback: temporarily stopLockTask, start settings, and re-lock when user returns
+                    if (!opened) {
+                        try {
+                            android.util.Log.i("MainActivity", "All standard paths failed. Using stopLockTask fallback...")
+                            stopLockTask()
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).apply {
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(intent)
+                            opened = true
+                            android.util.Log.i("MainActivity", "Opened settings after stopLockTask fallback")
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "stopLockTask fallback failed: ${e.message}")
+                        }
+                    }
+                    
+                    if (opened) {
+                        result.success(true)
+                    } else {
+                        isOpeningSettings = false
+                    }
+                }
+
+                // Direct calling — always ACTION_CALL to avoid opening system dialer.
+                // ACTION_DIAL is intentionally NOT used because it opens the full dialer UI.
+                // CALL_PHONE is auto-granted via Device Owner setPermissionGrantState.
+                "makePhoneCall" -> {
+                    val number = call.argument<String>("number") ?: ""
+                    if (number.isNotEmpty()) {
+                        val cleanNumber = number.replace(Regex("[^0-9+]"), "")
+                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        val comp = ComponentName(this, MyDeviceAdminReceiver::class.java)
+
+                        // Re-grant CALL_PHONE right before calling (in case it was reset)
+                        if (dpm.isDeviceOwnerApp(packageName)) {
+                            try {
+                                dpm.setPermissionGrantState(
+                                    comp, packageName,
+                                    android.Manifest.permission.CALL_PHONE,
+                                    DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                                )
+                            } catch (_: Exception) {}
+                        }
+
+                        // Check if permission is actually granted before attempting call
+                        val hasCallPermission = checkSelfPermission(android.Manifest.permission.CALL_PHONE) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                        android.util.Log.d("MainActivity", "makePhoneCall: number=$cleanNumber, CALL_PHONE granted=$hasCallPermission, kioskActive=$isKioskActive")
+
+                        if (!hasCallPermission) {
+                            result.error("PERMISSION_DENIED", "CALL_PHONE not granted", null)
+                            return@setMethodCallHandler
+                        }
+
+                        // If kiosk is active, temporarily stop lock task so the dialer can launch.
+                        // The dialer is whitelisted in setLockTaskPackages, but stopLockTask ensures
+                        // Android can switch to the dialer activity without restriction.
+                        val wasKioskActive = isKioskActive
+                        if (wasKioskActive) {
+                            try {
+                                stopLockTask()
+                                android.util.Log.d("MainActivity", "stopLockTask() called before emergency call")
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "stopLockTask before call failed: ${e.message}")
+                            }
+                        }
+
+                        isOpeningSettings = true
+
+                        // Try ACTION_CALL first (direct call, no dialer UI confirmation).
+                        // Fall back to ACTION_DIAL if ACTION_CALL is blocked by system.
+                        var callStarted = false
+                        try {
+                            val callIntent = android.content.Intent(android.content.Intent.ACTION_CALL).apply {
+                                data = android.net.Uri.parse("tel:$cleanNumber")
+                                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            startActivity(callIntent)
+                            callStarted = true
+                            android.util.Log.d("MainActivity", "ACTION_CALL launched for $cleanNumber")
+                        } catch (e: SecurityException) {
+                            android.util.Log.e("MainActivity", "ACTION_CALL SecurityException, trying ACTION_DIAL: ${e.message}")
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "ACTION_CALL failed, trying ACTION_DIAL: ${e.message}")
+                        }
+
+                        // Fallback: ACTION_DIAL opens the dialer with number pre-filled
+                        if (!callStarted) {
+                            try {
+                                val dialIntent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                                    data = android.net.Uri.parse("tel:$cleanNumber")
+                                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                startActivity(dialIntent)
+                                callStarted = true
+                                android.util.Log.d("MainActivity", "ACTION_DIAL fallback launched for $cleanNumber")
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "ACTION_DIAL also failed: ${e.message}")
+                            }
+                        }
+
+                        if (callStarted) {
+                            result.success(true)
+                        } else {
+                            // Both attempts failed — restore kiosk and reset flags
+                            isOpeningSettings = false
+                            if (wasKioskActive) {
+                                try { startLockTask() } catch (_: Exception) {}
+                            }
+                            result.error("CALL_FAILED", "Could not launch dialer. Check permissions.", null)
+                        }
+                    } else {
+                        result.error("INVALID_NUMBER", "Phone number is empty", null)
+                    }
+                }
+
                 else -> result.notImplemented()
             }
         }
 
-        // ── SMS Lock Channel ──────────────────────────────────────
+        // ── SMS Lock Channel ─────────────────────────────────────
         val smsPrefs = getSharedPreferences(SmsReceiver.PREFS_NAME, Context.MODE_PRIVATE)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sms_lock_channel").setMethodCallHandler { call, result ->
             when (call.method) {
-                "getSecretCode" -> {
-                    val code = smsPrefs.getString(SmsReceiver.KEY_SECRET, null)
-                    result.success(code)
+                "getSmsKey" -> {
+                    val key = smsPrefs.getString(SmsReceiver.KEY_AES_SECRET, null)
+                    result.success(key)
                 }
-                "setSecretCode" -> {
-                    val code = call.argument<String>("code") ?: ""
-                    if (code.length < 4) {
-                        result.error("INVALID", "Secret code must be at least 4 characters.", null)
+                "saveSmsKey" -> {
+                    val key = call.argument<String>("key") ?: ""
+                    if (key.length != 32) {
+                        result.error("INVALID", "AES key must be exactly 32 characters.", null)
                     } else {
-                        smsPrefs.edit().putString(SmsReceiver.KEY_SECRET, code).apply()
+                        smsPrefs.edit().putString(SmsReceiver.KEY_AES_SECRET, key).apply()
                         result.success(true)
                     }
-                }
-                "generateSecretCode" -> {
-                    // Generate a random 6-digit code
-                    val code = (100000..999999).random().toString()
-                    smsPrefs.edit().putString(SmsReceiver.KEY_SECRET, code).apply()
-                    result.success(code)
                 }
                 else -> result.notImplemented()
             }
@@ -352,9 +637,9 @@ class MainActivity: FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
             val devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val myAdmin = ComponentName(this, MyDeviceAdminReceiver::class.java)
-            val legacyAdmin = ComponentName(this, AdminReceiver::class.java)
-            val componentName = if (devicePolicyManager.isAdminActive(legacyAdmin)) legacyAdmin else myAdmin
+            
+            
+            val componentName = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
             when (call.method) {
                 "isAdminActive" -> {
@@ -376,7 +661,31 @@ class MainActivity: FlutterActivity() {
                     try {
                         if (devicePolicyManager.isDeviceOwnerApp(packageName)) {
                             // Whitelist our app for Lock Task (True Kiosk)
-                            devicePolicyManager.setLockTaskPackages(componentName, arrayOf(packageName))
+                             // Whitelist our app + system settings + dialer apps for emergency calls.
+                             devicePolicyManager.setLockTaskPackages(
+                                 componentName, 
+                                 arrayOf(
+                                     packageName,
+                                     // Settings (needed for WiFi configuration)
+                                     "com.android.settings", 
+                                     "com.google.android.settings",
+                                     "com.samsung.android.settings",
+                                     "com.oppo.settings",
+                                     "com.vivo.settings",
+                                     "com.huawei.android.settings",
+                                     "com.miui.settings",
+                                     "com.coloros.settings",
+                                     // Dialer apps (needed for emergency calls from lock screen)
+                                     "com.android.dialer",
+                                     "com.google.android.dialer",
+                                     "com.samsung.android.dialer",
+                                     "com.coloros.dialer",
+                                     "com.oppo.dialer",
+                                     "com.miui.dialer",
+                                     "com.vivo.dialer",
+                                     "com.android.phone"
+                                 )
+                             )
                             // STRICT: Disable Home, Recents, Back, Status Bar, Global Actions
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                                 devicePolicyManager.setLockTaskFeatures(
@@ -434,12 +743,8 @@ class MainActivity: FlutterActivity() {
                                     devicePolicyManager.addUserRestriction(componentName, "no_oem_unlock")
                                 } catch (_: Exception) {}
                             } else {
-                                // ALLOW (admin granted permission)
-                                devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_FACTORY_RESET)
-                                devicePolicyManager.clearUserRestriction(componentName, UserManager.DISALLOW_SAFE_BOOT)
-                                try {
-                                    devicePolicyManager.clearUserRestriction(componentName, "no_oem_unlock")
-                                } catch (_: Exception) {}
+                                // Do nothing. We intentionally ignore requests to ALLOW factory reset,
+                                // because factory reset must remain permanently blocked while the app is Device Owner.
                             }
                             result.success(true)
                         } else {
@@ -801,6 +1106,27 @@ class MainActivity: FlutterActivity() {
                     result.notImplemented()
                 }
             }
+        }
+    }
+
+    private fun enforceCoreSecurityPolicies() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val adminComponent = ComponentName(this, MyDeviceAdminReceiver::class.java)
+
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                // Unconditionally block factory reset, safe boot, and OEM unlock
+                dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_FACTORY_RESET)
+                dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_SAFE_BOOT)
+                try {
+                    dpm.addUserRestriction(adminComponent, "no_oem_unlock")
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "OEM Unlock restriction not supported", e)
+                }
+                android.util.Log.d("MainActivity", "Core security policies (Factory Reset & OEM Unlock block) enforced on startup")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error enforcing core security policies", e)
         }
     }
 }

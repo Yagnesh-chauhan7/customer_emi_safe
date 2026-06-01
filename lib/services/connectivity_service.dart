@@ -29,6 +29,20 @@ class ConnectivityService {
     }
   }
 
+
+  /// Opens the Android system WiFi settings page directly.
+  /// Works in kiosk mode because com.android.settings is whitelisted
+  /// in LockTask packages. Returns true if settings was opened successfully.
+  static Future<bool> openWifiSettings() async {
+    try {
+      await _channel.invokeMethod('openWifiSettings');
+      return true;
+    } catch (e) {
+      debugPrint('openWifiSettings error: $e');
+      return false;
+    }
+  }
+
   // ─────────────── MOBILE DATA ───────────────
 
   /// Returns {'success': bool, 'enabled': bool}
