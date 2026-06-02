@@ -2,12 +2,13 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:customer_emi_app/services/sms_lock_service.dart';
 import 'package:customer_emi_app/main.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:android_intent_plus/android_intent.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:customer_emi_app/services/connectivity_service.dart';
 import 'qr_scanner_screen.dart';
+import 'package:customer_emi_app/screens/emergency_call_screen.dart';
+import 'package:customer_emi_app/theme/app_colors.dart';
 
 class LockScreen extends StatefulWidget {
   const LockScreen({super.key});
@@ -29,6 +30,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   String _activationCode = "";
   String? _paymentUpiId;
   int _emiAmount = 0;
+  bool _isQrView = false;
   @override
   void initState() {
     super.initState();
@@ -50,6 +52,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         setState(() {
           _wallpaperUrl = prefs.getString('lock_screen_wallpaper_url');
           _activationCode = prefs.getString('activation_code') ?? '';
+          _shopName = prefs.getString('shop_name') ?? _shopName;
         });
       }
 
@@ -92,7 +95,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         // Fetch UPI ID
         final paymentData = await supabase
             .from('shop_owner_payment_table')
-            .select('payment_upi_id')
+            .select('payment_upi_id, is_qr_view')
             .eq('owner_id', ownerId)
             .maybeSingle();
 
@@ -110,6 +113,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           setState(() {
             if (kycData != null && kycData['kyc_shop_name'] != null) {
               _shopName = kycData['kyc_shop_name'];
+              prefs.setString('shop_name', _shopName);
             }
             if (ownerData != null) {
               _ownerName = ownerData['owner_name'] ?? _ownerName;
@@ -117,6 +121,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             }
             if (paymentData != null) {
               _paymentUpiId = paymentData['payment_upi_id'];
+              _isQrView = (paymentData['is_qr_view'] as bool?) ?? false;
             }
             if (customerData != null) {
               if (customerData['emi_amount'] != null) {
@@ -162,7 +167,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         SnackBar(
           content: const Text('Please enter authorization code'),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFEF4444),
+          backgroundColor: AppColors.danger,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
@@ -196,7 +201,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         SnackBar(
           content: const Text('Invalid Authorization Code'),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFEF4444),
+          backgroundColor: AppColors.danger,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
@@ -207,8 +212,8 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
   Widget build(BuildContext context) {
     return Theme(
       data: ThemeData.light().copyWith(
-        scaffoldBackgroundColor: const Color(0xFFFFFFFF),
-        primaryColor: const Color(0xFFEF4444),
+        scaffoldBackgroundColor: AppColors.background,
+        primaryColor: AppColors.primary,
       ),
       child: Scaffold(
         body: Stack(
@@ -225,9 +230,9 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Color(0xFFFFFFFF),
-                          Color(0xFFFEF2F2),
-                          Color(0xFFFEE2E2),
+                          Colors.white,
+                          AppColors.background,
+                          Color(0xFFEEF2F7),
                         ],
                       ),
                     ),
@@ -241,9 +246,9 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Color(0xFFFFFFFF),
-                      Color(0xFFFEF2F2),
-                      Color(0xFFFEE2E2),
+                      Colors.white,
+                      AppColors.background,
+                      Color(0xFFEEF2F7),
                     ],
                   ),
                 ),
@@ -261,7 +266,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                     height: 350,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: const Color(0xFFEF4444).withValues(alpha: 0.1 * _glowAnimation.value),
+                      color: AppColors.primary.withValues(alpha: 0.1 * _glowAnimation.value),
                     ),
                   );
                 },
@@ -278,7 +283,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                     _buildSecurityHeader(),
                     const SizedBox(height: 32),
                     _buildShopIdentity(),
-                    if (_paymentUpiId != null && _paymentUpiId!.isNotEmpty) ...[
+                    if (_paymentUpiId != null && _paymentUpiId!.isNotEmpty && _isQrView) ...[
                       const SizedBox(height: 24),
                       _buildPaymentPortal(),
                     ],
@@ -301,29 +306,78 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: const Color(0xFFEF4444).withValues(alpha: 0.08),
-            border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.3), width: 1.5),
+            color: Colors.white,
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.15), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.15),
-                blurRadius: 40,
+                color: AppColors.primary.withValues(alpha: 0.08),
+                blurRadius: 24,
                 spreadRadius: 2,
               ),
             ],
           ),
-          child: const Icon(Icons.security_rounded, color: Color(0xFFEF4444), size: 42),
+          child: ClipOval(
+            child: Image.asset(
+              'assets/icon.png',
+              height: 80,
+              width: 80,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => Container(
+                width: 80,
+                height: 80,
+                color: AppColors.primary.withValues(alpha: 0.1),
+                child: const Icon(Icons.broken_image_rounded, color: AppColors.primary, size: 40),
+              ),
+            ),
+          ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         const Text(
-          'DEVICE RESTRICTED',
+          'EMI SHIELD',
           style: TextStyle(
-            color: Color(0xFFEF4444),
+            color: AppColors.mainText,
             fontWeight: FontWeight.w900,
-            letterSpacing: 4,
-            fontSize: 14,
+            letterSpacing: 6,
+            fontSize: 24,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Device Security & Protection',
+          style: TextStyle(
+            color: AppColors.primary,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2,
+            fontSize: 10,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.15), width: 1),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.security_rounded, color: AppColors.primary, size: 16),
+              const SizedBox(width: 8),
+              Text(
+                'This device has been locked by $_shopName',
+                style: const TextStyle(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                  letterSpacing: 0.2,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
         ),
       ],
@@ -340,21 +394,21 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             style: const TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF991B1B),
+              color: AppColors.primary,
               letterSpacing: 0.5,
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.verified_user_outlined, size: 14, color: Color(0xFFEF4444)),
+              const Icon(Icons.verified_user_outlined, size: 14, color: AppColors.primary),
               const SizedBox(width: 6),
               Text(
-                _ownerName,
+                'Owner: $_ownerName',
                 style: const TextStyle(
-                  color: Color(0xFFEF4444),
+                  color: AppColors.mainText,
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 0.5,
@@ -362,14 +416,35 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          if (_emiAmount > 0) ...[
+          if (_contactNumber.isNotEmpty) ...[
             const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.phone_rounded, size: 14, color: AppColors.primary),
+                const SizedBox(width: 6),
+                Text(
+                  'Support: $_contactNumber',
+                  style: const TextStyle(
+                    color: AppColors.mainText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (_emiAmount > 0) ...[
+            const SizedBox(height: 10),
+            const Divider(color: AppColors.divider, height: 1),
+            const SizedBox(height: 10),
             Text(
               'EMI Amount: ₹$_emiAmount',
               style: const TextStyle(
-                color: Color(0xFF991B1B),
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
+                color: AppColors.primary,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
               ),
             ),
@@ -387,7 +462,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           const Text(
             'PAYMENT GATEWAY',
             style: TextStyle(
-              color: Color(0xFF991B1B),
+              color: AppColors.mainText,
               fontWeight: FontWeight.w900,
               fontSize: 13,
               letterSpacing: 2,
@@ -417,7 +492,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+                          color: AppColors.primary.withValues(alpha: 0.1),
                           blurRadius: 20,
                         ),
                       ],
@@ -434,7 +509,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF991B1B).withValues(alpha: 0.8),
+                      color: AppColors.primary.withValues(alpha: 0.8),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: const Text(
@@ -468,9 +543,9 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.15)),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.15)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -478,14 +553,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                   Text(
                     _paymentUpiId ?? '',
                     style: const TextStyle(
-                      color: Color(0xFF991B1B),
+                      color: AppColors.primary,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       fontFamily: 'monospace',
                     ),
                   ),
                   const SizedBox(width: 12),
-                  const Icon(Icons.copy_all_rounded, size: 18, color: Color(0xFFEF4444)),
+                  const Icon(Icons.copy_all_rounded, size: 18, color: AppColors.primary),
                 ],
               ),
             ),
@@ -501,7 +576,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
         const Text(
           'ENTER AUTHORIZATION CODE',
           style: TextStyle(
-            color: Color(0xFFEF4444),
+            color: AppColors.primary,
             fontWeight: FontWeight.w800,
             fontSize: 11,
             letterSpacing: 2,
@@ -517,14 +592,14 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
                   controller: _unlockCodeController,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                    color: Color(0xFF991B1B),
+                    color: AppColors.primary,
                     fontSize: 26,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 16,
                   ),
                   decoration: InputDecoration(
                     hintText: '••••••',
-                    hintStyle: TextStyle(color: const Color(0xFFEF4444).withValues(alpha: 0.3), letterSpacing: 16),
+                    hintStyle: TextStyle(color: AppColors.secondaryText.withValues(alpha: 0.3), letterSpacing: 16),
                     contentPadding: const EdgeInsets.symmetric(vertical: 12),
                     border: InputBorder.none,
                   ),
@@ -533,10 +608,10 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
               Container(
                 height: 40,
                 width: 1,
-                color: const Color(0xFFEF4444).withValues(alpha: 0.2),
+                color: AppColors.primary.withValues(alpha: 0.2),
               ),
               IconButton(
-                icon: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFFEF4444), size: 30),
+                icon: const Icon(Icons.qr_code_scanner_rounded, color: AppColors.primary, size: 30),
                 onPressed: _scanQR,
                 padding: const EdgeInsets.only(left: 16, right: 8),
               ),
@@ -551,11 +626,11 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
             gradient: const LinearGradient(
-              colors: [Color(0xFFEF4444), Color(0xFFB91C1C)],
+              colors: [AppColors.primary, AppColors.primaryHover],
             ),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.3),
+                color: AppColors.primary.withValues(alpha: 0.3),
                 blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
@@ -578,16 +653,28 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     );
   }
 
-  void _makeDirectCall() async {
-    if (_contactNumber.isEmpty) return;
-    try {
-      final intent = AndroidIntent(
-        action: 'android.intent.action.CALL',
-        data: 'tel:$_contactNumber',
+  Future<void> _openEmergencyDialer() async {
+    HapticFeedback.lightImpact();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EmergencyCallScreen(supportNumber: _contactNumber),
+      ),
+    );
+  }
+
+  Future<void> _openWifiSettings() async {
+    HapticFeedback.lightImpact();
+    final success = await ConnectivityService.openWifiSettings();
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Could not open WiFi settings'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.danger,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
-      await intent.launch();
-    } catch (e) {
-      debugPrint('Call failed: $e');
     }
   }
 
@@ -595,49 +682,91 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
     return Column(
       children: [
         const Text(
-          'DIRECT ASSISTANCE',
+          'DIRECT ASSISTANCE & UTILITIES',
           style: TextStyle(
-            color: Color(0xFFEF4444),
+            color: AppColors.primary,
             fontSize: 10,
             fontWeight: FontWeight.w900,
             letterSpacing: 3,
           ),
         ),
         const SizedBox(height: 16),
-        GestureDetector(
-          onTap: _makeDirectCall,
-          child: _buildGlassContainer(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.support_agent_rounded, color: Color(0xFFEF4444), size: 22),
-                const SizedBox(width: 12),
-                Column(
+        Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          alignment: WrapAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: _openEmergencyDialer,
+              child: _buildGlassContainer(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      'CONTACT SUPPORT',
-                      style: TextStyle(
-                        color: Color(0xFF991B1B),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                    if (_contactNumber.isNotEmpty)
-                      Text(
-                        _contactNumber,
-                        style: const TextStyle(
-                          color: Color(0xFFEF4444),
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                    const Icon(Icons.phone_enabled_rounded, color: AppColors.primary, size: 22),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'EMERGENCY CALL',
+                          style: TextStyle(
+                            color: AppColors.mainText,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                            letterSpacing: 1,
+                          ),
                         ),
-                      ),
+                        const Text(
+                          'Dialer services',
+                          style: TextStyle(
+                            color: AppColors.secondaryText,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
-          ),
+            GestureDetector(
+              onTap: _openWifiSettings,
+              child: _buildGlassContainer(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.wifi_rounded, color: AppColors.primary, size: 22),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'CONNECT WIFI',
+                          style: TextStyle(
+                            color: AppColors.mainText,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        const Text(
+                          'Configure settings',
+                          style: TextStyle(
+                            color: AppColors.secondaryText,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -656,7 +785,7 @@ class _LockScreenState extends State<LockScreen> with SingleTickerProviderStateM
             border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
                 blurRadius: 10,
               )
             ]
