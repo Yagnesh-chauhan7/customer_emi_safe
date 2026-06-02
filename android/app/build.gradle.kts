@@ -32,18 +32,9 @@ android {
         versionName = flutter.versionName
     }
 
-    signingConfigs {
-        create("release") {
-            keyAlias = "customer_emi"
-            keyPassword = "emi2024safe"
-            storeFile = file("customer_emi_release.jks")
-            storePassword = "emi2024safe"
-        }
-    }
-
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             isShrinkResources = false
         }

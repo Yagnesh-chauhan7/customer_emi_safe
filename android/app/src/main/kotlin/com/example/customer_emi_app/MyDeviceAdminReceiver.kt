@@ -55,6 +55,11 @@ class MyDeviceAdminReceiver : DeviceAdminReceiver() {
 
         if (dpm.isDeviceOwnerApp(context.packageName)) {
             try {
+                // Set the organization name that appears on the lock screen and settings
+                // Instead of "This device is managed by your organization", it will say:
+                // "This device is managed by [Your Company Name]"
+                dpm.setOrganizationName(adminComponent, "EMI Shield")
+
                 // Permanently block factory reset, safe boot, and OEM unlock from Settings
                 dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_FACTORY_RESET)
                 dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_SAFE_BOOT)
