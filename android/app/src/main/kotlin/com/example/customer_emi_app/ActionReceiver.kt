@@ -100,15 +100,36 @@ class ActionReceiver : BroadcastReceiver() {
 
     private fun settleEmi(context: Context) {
         try {
-            // We launch MainActivity first because we are still Device Owner, which gives us
-            // the privilege to launch activities from the background. MainActivity will then
-            // clear device owner and trigger the uninstall prompt while in the foreground.
-            val launchIntent = Intent(context, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                putExtra("perform_uninstall", true)
+            val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            val componentName = ComponentName(context, MyDeviceAdminReceiver::class.java)
+
+            if (devicePolicyManager.isDeviceOwnerApp(context.packageName)) {
+                val restrictions = listOf(
+                    android.os.UserManager.DISALLOW_FACTORY_RESET,
+                    android.os.UserManager.DISALLOW_SAFE_BOOT,
+                    android.os.UserManager.DISALLOW_REMOVE_MANAGED_PROFILE,
+                    android.os.UserManager.DISALLOW_UNINSTALL_APPS,
+                    "no_oem_unlock"
+                )
+                for (r in restrictions) {
+                    try { devicePolicyManager.clearUserRestriction(componentName, r) } catch (e: Exception) {}
+                }
+                try { devicePolicyManager.setUninstallBlocked(componentName, context.packageName, false) } catch (e: Exception) {}
+                
+                devicePolicyManager.clearDeviceOwnerApp(context.packageName)
+                Log.d(TAG, "Device Owner removed silently in background")
+            } else if (devicePolicyManager.isAdminActive(componentName)) {
+                devicePolicyManager.removeActiveAdmin(componentName)
+                Log.d(TAG, "Device Admin removed silently in background")
             }
-            context.startActivity(launchIntent)
-            Log.d(TAG, "MainActivity launched for uninstall")
+
+            // Attempt to trigger uninstall prompt. 
+            // Note: Android 10+ may block this because we are now in the background and no longer Device Owner.
+            // But the device is successfully unlocked regardless!
+            val uninstallIntent = Intent(Intent.ACTION_DELETE)
+            uninstallIntent.data = Uri.parse("package:${context.packageName}")
+            uninstallIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            context.startActivity(uninstallIntent)
         } catch (e: Exception) {
             Log.e(TAG, "settleEmi error", e)
         }

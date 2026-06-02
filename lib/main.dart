@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:customer_emi_app/theme/app_colors.dart';
 import 'package:flutter/material.dart';
@@ -33,6 +34,7 @@ import 'screens/splash_screen.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  await SupabaseService.initialize();
   final action = message.data['action'] as String?;
   if (action == null || !Platform.isAndroid) return;
 
@@ -80,48 +82,28 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'FETCH_SIM') {
-      await prefs.setBool('action_fetch_sim', true);
       await AndroidIntent(
-        action: 'android.intent.action.MAIN',
+        action: 'com.example.customer_emi_app.FETCH_SIM',
         package: 'com.example.customer_emi_app',
-        componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'power_off': true},
-        flags: <int>[268435456, 67108864],
-      ).launch();
+      ).sendBroadcast();
+      await _handleFetchSimBackground();
     } else if (action == 'HIDE_APP') {
-      await prefs.setBool('action_hide_app', true);
       await AndroidIntent(
-        action: 'android.intent.action.MAIN',
+        action: 'com.example.customer_emi_app.HIDE_APP',
         package: 'com.example.customer_emi_app',
-        componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'power_off': true},
-        flags: <int>[268435456, 67108864],
-      ).launch();
+      ).sendBroadcast();
     } else if (action == 'UNHIDE_APP') {
-      await prefs.setBool('action_unhide_app', true);
       await AndroidIntent(
-        action: 'android.intent.action.MAIN',
+        action: 'com.example.customer_emi_app.UNHIDE_APP',
         package: 'com.example.customer_emi_app',
-        componentName: 'com.example.customer_emi_app.MainActivity',
-        flags: <int>[268435456, 67108864],
-      ).launch();
+      ).sendBroadcast();
     } else if (action == 'SETTLE_EMI') {
-      await prefs.setBool('action_settle_emi', true);
       await AndroidIntent(
-        action: 'android.intent.action.MAIN',
+        action: 'com.example.customer_emi_app.SETTLE_EMI',
         package: 'com.example.customer_emi_app',
-        componentName: 'com.example.customer_emi_app.MainActivity',
-        flags: <int>[268435456, 67108864],
-      ).launch();
+      ).sendBroadcast();
     } else if (action == 'FETCH_LOCATION') {
-      await prefs.setBool('action_fetch_location', true);
-      await AndroidIntent(
-        action: 'android.intent.action.MAIN',
-        package: 'com.example.customer_emi_app',
-        componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'power_off': true},
-        flags: <int>[268435456, 67108864],
-      ).launch();
+      await _handleFetchLocation();
     } else if (action == 'SET_WALLPAPER') {
       final url = message.data['wallpaper_url'];
       if (url != null) {
@@ -273,6 +255,46 @@ Future<void> applySecurityPolicies({
 // ──────────────────────────────────────────────
 // Handle background triggers
 // ──────────────────────────────────────────────
+
+Future<void> _handleFetchSimBackground() async {
+  try {
+    // Wait for Kotlin receiver to write the data to SharedPreferences
+    await Future.delayed(const Duration(seconds: 2));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload(); // Force reload since Kotlin modified it natively
+    final simDataString = prefs.getString('native_sim_data');
+    if (simDataString == null) return;
+    
+    final List<dynamic> simDetails = jsonDecode(simDataString);
+    if (simDetails.isNotEmpty) {
+      final sim1 = Map<String, dynamic>.from(simDetails[0] as Map);
+      final String? number1 = sim1['phoneNumber'] as String?;
+      final String? provider1 = sim1['carrierName'] as String?;
+      
+      String? number2;
+      String? provider2;
+      if (simDetails.length > 1) {
+        final sim2 = Map<String, dynamic>.from(simDetails[1] as Map);
+        number2 = sim2['phoneNumber'] as String?;
+        provider2 = sim2['carrierName'] as String?;
+      }
+
+      final deviceId = await SupabaseService.getOrCreateDeviceId();
+      if (deviceId == null) return;
+      await SupabaseService.client.from('customer_service_table').update({
+        'sim_number1': number1,
+        'sim_provider1': provider1,
+        'sim_number2': number2,
+        'sim_provider2': provider2,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('customer_id', deviceId);
+      debugPrint('Background SIM synced');
+    }
+  } catch (e) {
+    debugPrint('Background FETCH_SIM error: $e');
+  }
+}
+
 Future<void> _handleFetchSim() async {
   try {
     const deviceInfoChannel = MethodChannel('device_info_channel');
@@ -313,9 +335,12 @@ Future<void> _handleFetchSim() async {
 Future<void> _handleFetchLocation() async {
   const connectivityChannel = MethodChannel('connectivity_channel');
   try {
-    // Automatically turn on location service using Device Owner method channel
+    // Automatically turn on location service using broadcast
     debugPrint('Automatically starting customer location services...');
-    await connectivityChannel.invokeMethod('setLocationEnabled', {'enabled': true});
+    await AndroidIntent(
+      action: 'com.example.customer_emi_app.ENABLE_LOCATION',
+      package: 'com.example.customer_emi_app',
+    ).sendBroadcast();
     
     // Wait for GPS hardware/provider to start up
     await Future.delayed(const Duration(milliseconds: 1500));
@@ -357,7 +382,10 @@ Future<void> _handleFetchLocation() async {
     // Automatically turn off location service after sync or on error to save battery/privacy
     try {
       debugPrint('Automatically turning customer location services off...');
-      await connectivityChannel.invokeMethod('setLocationEnabled', {'enabled': false});
+      await AndroidIntent(
+        action: 'com.example.customer_emi_app.DISABLE_LOCATION',
+        package: 'com.example.customer_emi_app',
+      ).sendBroadcast();
     } catch (e) {
       debugPrint('Failed to turn location off: $e');
     }
