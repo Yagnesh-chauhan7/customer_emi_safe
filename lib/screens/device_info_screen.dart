@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -76,6 +78,7 @@ class _DeviceInfoScreenState extends State<DeviceInfoScreen> {
 
   Future<void> _loadAll() async {
     setState(() => _loading = true);
+
     final all = await DeviceInfoService.getAllInfo();
     setState(() {
       _imeiList   = List<String>.from(all['imeiList'] ?? []);
@@ -86,6 +89,10 @@ class _DeviceInfoScreenState extends State<DeviceInfoScreen> {
       _deviceInfo = Map<String, dynamic>.from(all['deviceInfo'] ?? {});
       _loading    = false;
     });
+
+    print("serial ==> ${_serial}");
+    print("_imeiList ==> ${jsonEncode(_imeiList)}");
+    print("_deviceInfo ==> ${jsonEncode(_deviceInfo)}");
   }
 
   void _copy(String text) {
@@ -225,6 +232,7 @@ class _DeviceInfoScreenState extends State<DeviceInfoScreen> {
             _buildWarningCard('IMEI not available on this device.')
           else
             ..._imeiList.asMap().entries.map((e) => _buildImeiCard(e.key + 1, e.value)),
+
 
           const SizedBox(height: 16),
           _sectionTitle(Icons.memory, 'Serial Number', AppColors.success),

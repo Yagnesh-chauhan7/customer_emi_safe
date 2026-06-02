@@ -514,6 +514,7 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
 
 //        Supabase + everything else is deferred to background
 // ──────────────────────────────────────────────
+@pragma('vm:entry-point')
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 

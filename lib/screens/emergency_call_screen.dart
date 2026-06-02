@@ -2,9 +2,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class EmergencyCallScreen extends StatefulWidget {
-  const EmergencyCallScreen({super.key});
+  final String? supportNumber;
+  const EmergencyCallScreen({super.key, this.supportNumber});
 
   @override
   State<EmergencyCallScreen> createState() => _EmergencyCallScreenState();
@@ -53,12 +55,131 @@ class _EmergencyCallScreenState extends State<EmergencyCallScreen> with SingleTi
 
   Future<void> _makeCall() async {
     if (_dialedNumber.isEmpty) return;
-    final Uri launchUri = Uri(
-      scheme: 'tel',
-      path: _dialedNumber,
-    );
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
+
+    // Standard national and international emergency numbers
+    final allowedNumbers = ["100", "101", "102", "108", "112", "911", "1091"];
+    if (widget.supportNumber != null && widget.supportNumber!.isNotEmpty) {
+      final cleanSupport = widget.supportNumber!.replaceAll(RegExp(r'[^0-9+]'), '');
+      if (cleanSupport.isNotEmpty) {
+        allowedNumbers.add(cleanSupport);
+      }
+    }
+
+    final cleanDialed = _dialedNumber.replaceAll(RegExp(r'[^0-9+]'), '');
+
+    if (!allowedNumbers.contains(cleanDialed)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Only Emergency Calls (112, 100, 101, 102, 108, or Support) are allowed.',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFEF4444),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    HapticFeedback.mediumImpact();
+
+    // ── Step 1: Try native MethodChannel (ACTION_CALL — no dialer UI) ──────
+    // Kiosk mode mein stopLockTask() Kotlin side pe handle hota hai automatically.
+    bool callPlaced = false;
+    const connectivityChannel = MethodChannel('connectivity_channel');
+    try {
+      final success = await connectivityChannel.invokeMethod<bool>(
+        'makePhoneCall',
+        {'number': cleanDialed},
+      );
+      if (success == true) {
+        callPlaced = true;
+        debugPrint('Emergency call placed via native channel: $cleanDialed');
+      }
+    } on PlatformException catch (e) {
+      debugPrint('Native makePhoneCall failed (${e.code}): ${e.message}');
+      // Don't show error yet — try url_launcher fallback below
+    } catch (e) {
+      debugPrint('Native makePhoneCall exception: $e');
+    }
+
+    // ── Step 2: Fallback — url_launcher (tel: URI) ──────────────────────────
+    // Works even if MethodChannel is not responding or kiosk is blocking.
+    if (!callPlaced) {
+      try {
+        final telUri = Uri(scheme: 'tel', path: cleanDialed);
+        final launched = await launchUrl(
+          telUri,
+          mode: LaunchMode.externalApplication,
+        );
+        if (launched) {
+          callPlaced = true;
+          debugPrint('Emergency call placed via url_launcher: $cleanDialed');
+        }
+      } catch (e) {
+        debugPrint('url_launcher fallback failed: $e');
+      }
+    }
+
+    if (!mounted) return;
+
+    if (!callPlaced) {
+      // Both methods failed — show error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.error_outline_rounded, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Could not place call. Please check CALL_PHONE permission.',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFFEF4444),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    // ── Step 3: After call returns, restore lock screen if device was locked ──
+    // Wait for call activity to complete, then check lock state
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isLocked = prefs.getBool('is_locked') ?? false;
+      if (isLocked && mounted) {
+        // Re-apply kiosk mode and navigate back to lock screen
+        const adminChannel = MethodChannel('com.example.customer_emi_app/admin');
+        try {
+          await adminChannel.invokeMethod('startKioskMode');
+        } catch (_) {}
+        // Pop back to lock screen (it's below in the stack)
+        if (mounted) Navigator.of(context).pop();
+      }
+    } catch (e) {
+      debugPrint('Lock restore after call error: $e');
     }
   }
 
