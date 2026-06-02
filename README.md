@@ -6,12 +6,17 @@ A new Flutter project.
 
 This project is a starting point for a Flutter application.
 
-A few resources to get you started if this is your first Flutter project:
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+/// this command is for build sha 256 hash key generate
+flutter build apk --release && shasum -a 256 build/app/outputs/flutter-apk/app-release.apk
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+
+
+{
+"android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.example.customer_emi_app/com.example.customer_emi_app.MyDeviceAdminReceiver",
+"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": "FNBmc41BcMQOjoG0cNsGIFG20I17eL5l-QDcNo4xQNU",
+"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://files.catbox.moe/aqdcpj.apk"
+"android.app.extra.PROVISIONING_SKIP_ENCRYPTION": true,
+"android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+
+}
