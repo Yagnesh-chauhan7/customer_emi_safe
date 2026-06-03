@@ -343,12 +343,17 @@ Future<void> _handleFetchLocation() async {
     ).sendBroadcast();
     
     // Wait for GPS hardware/provider to start up
-    await Future.delayed(const Duration(milliseconds: 1500));
+    await Future.delayed(const Duration(milliseconds: 2000));
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      debugPrint('Location services are still disabled.');
-      return;
+      // Retry once more if it takes time to turn on
+      await Future.delayed(const Duration(milliseconds: 2000));
+      serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('Location services are still disabled after waiting.');
+        return;
+      }
     }
 
     LocationPermission permission = await Geolocator.checkPermission();
@@ -365,8 +370,25 @@ Future<void> _handleFetchLocation() async {
       return;
     }
 
-    Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+    Position? position;
+    try {
+      // Use low accuracy (network-based) for the absolute fastest fix indoors, and give it 35 seconds
+      position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.low,
+          timeLimit: Duration(seconds: 35),
+        )
+      );
+    } catch (e) {
+      debugPrint('getCurrentPosition failed or timed out: $e');
+      // Fallback to last known position
+      position = await Geolocator.getLastKnownPosition();
+    }
+
+    if (position == null) {
+      debugPrint('Could not obtain any location (current or last known).');
+      return;
+    }
 
     final deviceId = await SupabaseService.getOrCreateDeviceId();
     if (deviceId == null) return;
