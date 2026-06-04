@@ -128,6 +128,18 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         arguments: {'power_off': true},
         flags: <int>[268435456, 67108864],
       ).launch();
+    } else if (action == 'REMOVE_LOCK') {
+      // Background isolate can't call MethodChannel directly.
+      // Store flag and silently bring app to foreground so main isolate
+      // executes resetDevicePassword WITHOUT touching kiosk mode.
+      await prefs.setBool('action_remove_lock', true);
+      await AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        package: 'com.example.customer_emi_app',
+        componentName: 'com.example.customer_emi_app.MainActivity',
+        arguments: {'apply_policies': true}, // silent foreground — no kiosk change
+        flags: <int>[268435456, 67108864],
+      ).launch();
     }
   } catch (e) {
     debugPrint('Background FCM error: $e');
@@ -420,8 +432,39 @@ Future<void> _handleFetchLocation() async {
 }
 
 // ──────────────────────────────────────────────
-// Unified foreground FCM action router
+// Remove Device Screen Lock (PIN / Password / Fingerprint / Face)
+// Requires Device Owner. Uses DPM.resetPassword("", 0).
 // ──────────────────────────────────────────────
+Future<void> _handleRemoveLock() async {
+  try {
+    // Safety guard: only remove screen password when kiosk is NOT active.
+    final prefs = await SharedPreferences.getInstance();
+    final isKioskActive = prefs.getBool('is_locked') ?? false;
+    if (isKioskActive) {
+      debugPrint('🔓 REMOVE_LOCK: Skipped — kiosk/device lock is currently active.');
+      return;
+    }
+
+    debugPrint('🔓 REMOVE_LOCK: Attempting to clear device screen lock...');
+    final result = await _adminChannel.invokeMethod<bool>('resetDevicePassword');
+    if (result == true) {
+      debugPrint('🔓 REMOVE_LOCK: ✅ Screen lock cleared successfully (PIN/Face/Fingerprint removed).');
+    } else {
+      debugPrint('🔓 REMOVE_LOCK: ⚠️ resetDevicePassword returned false (possibly not device owner or token inactive).');
+    }
+  } on PlatformException catch (e) {
+    if (e.code == 'TOKEN_NOT_ACTIVE' || e.code == 'TOKEN_NOT_SET') {
+      debugPrint('🔓 REMOVE_LOCK: ⏳ Token not yet active. ${e.message}');
+      debugPrint('🔓 REMOVE_LOCK: ℹ️ User needs to unlock device once after app setup for token to activate, then retry.');
+    } else {
+      debugPrint('🔓 REMOVE_LOCK: ❌ Error [${e.code}]: ${e.message}');
+    }
+  } catch (e) {
+    debugPrint('🔓 REMOVE_LOCK error: $e');
+  }
+}
+
+
 Future<void> _handleFcmAction(Map<String, dynamic> data) async {
   final action = data['action'] as String?;
   if (action == null) return;
@@ -521,6 +564,9 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
       } catch (e) {
         debugPrint('silentUpdate error: $e');
       }
+      break;
+    case 'REMOVE_LOCK':
+      await _handleRemoveLock();
       break;
     // ── Connectivity Controls ──────────────────────────────────────────
     case 'SET_WIFI':
@@ -680,6 +726,10 @@ Future<void> _initializeInBackground() async {
     } catch (e) {
       debugPrint('Background silentUpdate error: $e');
     }
+  }
+  if (prefs.getBool('action_remove_lock') == true) {
+    await prefs.remove('action_remove_lock');
+    await _handleRemoveLock();
   }
 
   try {

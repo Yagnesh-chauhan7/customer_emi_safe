@@ -184,7 +184,7 @@ class MainActivity: FlutterActivity() {
                         dpm.lockNow()
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("MainActivity", "Error locking screen: \${e.message}")
+                    android.util.Log.e("MainActivity", "Error locking screen: ${e.message}")
                 }
             }, 500)
         }
@@ -918,6 +918,131 @@ class MainActivity: FlutterActivity() {
                         startActivity(intent)
                         result.success(true)
                     } catch (e: Exception) {
+                        result.error("ERROR", e.message, null)
+                    }
+                }
+
+                // ── Remove Device Screen Lock (PIN / Password / Fingerprint / Face) ──
+                // Uses resetPasswordWithToken (API 26+) for Android 8+ — works even after
+                // user has set a password, as long as the token was registered on app setup.
+                // Falls back to deprecated resetPassword for older devices.
+                "resetDevicePassword" -> {
+                    try {
+                        if (!devicePolicyManager.isDeviceOwnerApp(packageName)) {
+                            android.util.Log.w("MainActivity", "resetDevicePassword: Not device owner")
+                            result.error("NOT_DEVICE_OWNER", "App is not Device Owner. Cannot reset password.", null)
+                            return@setMethodCallHandler
+                        }
+
+                        // ── Android 8+ (API 26+): token-based approach ──────────────────
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            val prefs = getSharedPreferences(
+                                MyDeviceAdminReceiver.PREFS_NAME, Context.MODE_PRIVATE
+                            )
+                            val tokenHex = prefs.getString(MyDeviceAdminReceiver.KEY_RESET_TOKEN, null)
+
+                            if (tokenHex != null) {
+                                val token = MyDeviceAdminReceiver.hexToBytes(tokenHex)
+
+                                // Check token is active
+                                val isActive = try {
+                                    devicePolicyManager.isResetPasswordTokenActive(componentName)
+                                } catch (e: Exception) { false }
+
+                                android.util.Log.d("MainActivity", "resetDevicePassword: tokenHex present, isActive=$isActive")
+
+                                if (isActive) {
+                                    // First, remove all password quality constraints so empty string is accepted
+                                    try {
+                                        devicePolicyManager.setPasswordQuality(
+                                            componentName,
+                                            DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED
+                                        )
+                                        devicePolicyManager.setPasswordMinimumLength(componentName, 0)
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("MainActivity", "Could not set PASSWORD_QUALITY_UNSPECIFIED: ${e.message}")
+                                    }
+
+                                    val success = devicePolicyManager.resetPasswordWithToken(
+                                        componentName, "", token, 0
+                                    )
+                                    android.util.Log.d("MainActivity", "resetPasswordWithToken result: $success")
+                                    result.success(success)
+                                    return@setMethodCallHandler
+                                } else {
+                                    // Token not active yet — try to re-register it
+                                    android.util.Log.w("MainActivity", "Token not active. Attempting re-registration...")
+                                    try {
+                                        val reReg = devicePolicyManager.setResetPasswordToken(componentName, token)
+                                        android.util.Log.d("MainActivity", "Re-registration result: $reReg")
+                                        if (reReg && devicePolicyManager.isResetPasswordTokenActive(componentName)) {
+                                            try {
+                                                devicePolicyManager.setPasswordQuality(
+                                                    componentName,
+                                                    DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED
+                                                )
+                                                devicePolicyManager.setPasswordMinimumLength(componentName, 0)
+                                            } catch (e: Exception) {}
+                                            val success = devicePolicyManager.resetPasswordWithToken(
+                                                componentName, "", token, 0
+                                            )
+                                            android.util.Log.d("MainActivity", "resetPasswordWithToken after re-reg: $success")
+                                            result.success(success)
+                                            return@setMethodCallHandler
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("MainActivity", "Re-registration failed: ${e.message}")
+                                    }
+
+                                    // Token still not active — generate a new one and try
+                                    android.util.Log.w("MainActivity", "Generating fresh token as last resort...")
+                                    try {
+                                        val newToken = ByteArray(32)
+                                        java.security.SecureRandom().nextBytes(newToken)
+                                        val newReg = devicePolicyManager.setResetPasswordToken(componentName, newToken)
+                                        if (newReg) {
+                                            prefs.edit().putString(
+                                                MyDeviceAdminReceiver.KEY_RESET_TOKEN,
+                                                MyDeviceAdminReceiver.bytesToHex(newToken)
+                                            ).apply()
+                                            android.util.Log.d("MainActivity", "Fresh token registered: $newReg")
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("MainActivity", "Fresh token generation failed: ${e.message}")
+                                    }
+
+                                    result.error(
+                                        "TOKEN_NOT_ACTIVE",
+                                        "Reset token is not active. A new token has been registered — please try again after the user unlocks the device once.",
+                                        null
+                                    )
+                                    return@setMethodCallHandler
+                                }
+                            } else {
+                                // No stored token — generate one now (works if no password is set yet)
+                                android.util.Log.w("MainActivity", "No stored token found. Registering token now...")
+                                MyDeviceAdminReceiver.generateAndSetResetToken(this)
+                                result.error(
+                                    "TOKEN_NOT_SET",
+                                    "Reset token was just registered. Please unlock the device once, then try again.",
+                                    null
+                                )
+                                return@setMethodCallHandler
+                            }
+                        }
+
+                        // ── Android < 8 (API < 26): legacy deprecated approach ───────────
+                        android.util.Log.d("MainActivity", "Using legacy resetPassword for Android < 8")
+                        @Suppress("DEPRECATION")
+                        val success = devicePolicyManager.resetPassword("", 0)
+                        android.util.Log.d("MainActivity", "Legacy resetPassword result: $success")
+                        result.success(success)
+
+                    } catch (e: SecurityException) {
+                        android.util.Log.e("MainActivity", "resetDevicePassword SecurityException: ${e.message}")
+                        result.error("SECURITY_ERROR", e.message, null)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "resetDevicePassword error: ${e.message}")
                         result.error("ERROR", e.message, null)
                     }
                 }
