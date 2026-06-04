@@ -3,37 +3,35 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 void main() async {
-  // Path to the Release APK that was just built
-  final apkPath = r'C:\Users\YAGNESH\AndroidStudioProjects\customer_emi_app\build\app\outputs\flutter-apk\app-release.apk';
+  final apkPath = r'C:\Users\Hello\.gemini\antigravity\scratch\github-app-release.apk';
   final file = File(apkPath);
   if (!await file.exists()) {
-    print('Error: Release APK file not found at $apkPath');
-    print('Make sure you have run: flutter build apk --release');
+    print('Error: APK file not found at $apkPath');
     return;
   }
 
-  // 1. Calculate file hash (PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM)
+  // Calculate file hash (PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM)
   final bytes = await file.readAsBytes();
   final fileHash = sha256.convert(bytes);
   final fileHashBase64Url = base64Url.encode(fileHash.bytes).replaceAll('=', '');
-  
-  print('================================================================');
-  print('1. PACKAGE CHECKSUM (Put this in your Admin App / Server)');
-  print('================================================================');
-  print('PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM: $fileHashBase64Url');
-  print('');
+  print('APK File SHA-256 (Hex): $fileHash');
+  print('PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM (Base64URL, no padding): $fileHashBase64Url');
 
-  // 2. Release Certificate SHA-256 Checksum (PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM)
-  // This is the SHA256 signature from your upload-keystore.jks!
-  final releaseCertHex = '656bded6c884d7a4ed4eb057b11eba652a769584fa328378739081eb12c4ab33';
+  // Let's also parse the debug certificate SHA-256 that we know:
+  // "d6b4d3b09a2685a7ffa7f4f1c61f88db2980939dd6d031a95cd4bf8e4c116b05"
+  final debugCertHex = 'd6b4d3b09a2685a7ffa7f4f1c61f88db2980939dd6d031a95cd4bf8e4c116b05';
+  final debugCertBytes = hexToBytes(debugCertHex);
+  final debugCertBase64Url = base64Url.encode(debugCertBytes);
+  print('Debug Cert SIGNATURE_CHECKSUM (with padding): $debugCertBase64Url');
+  print('Debug Cert SIGNATURE_CHECKSUM (no padding):   ${debugCertBase64Url.replaceAll('=', '')}');
+
+  // Release certificate SHA-256:
+  // "8893239f6e30205fcb4f34b465205bece470bf80c6cad6257fc40fdee594c2a6"
+  final releaseCertHex = '8893239f6e30205fcb4f34b465205bece470bf80c6cad6257fc40fdee594c2a6';
   final releaseCertBytes = hexToBytes(releaseCertHex);
-  final releaseCertBase64Url = base64Url.encode(releaseCertBytes).replaceAll('=', '');
-
-  print('================================================================');
-  print('2. SIGNATURE CHECKSUM (Put this in your Admin App / Server)');
-  print('================================================================');
-  print('PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM: $releaseCertBase64Url');
-  print('================================================================');
+  final releaseCertBase64Url = base64Url.encode(releaseCertBytes);
+  print('Release Cert SIGNATURE_CHECKSUM (with padding): $releaseCertBase64Url');
+  print('Release Cert SIGNATURE_CHECKSUM (no padding):   ${releaseCertBase64Url.replaceAll('=', '')}');
 }
 
 List<int> hexToBytes(String hex) {
