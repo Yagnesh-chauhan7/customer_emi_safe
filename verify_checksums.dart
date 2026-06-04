@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 void main() async {
-  final apkPath = r'C:\Users\Hello\.gemini\antigravity\scratch\github-app-release.apk';
+  final apkPath = r'C:\Users\Hello\koffeekodes\customer_emi_safe\build\app\outputs\flutter-apk\app-release.apk';
   final file = File(apkPath);
   if (!await file.exists()) {
     print('Error: APK file not found at $apkPath');
