@@ -15,7 +15,7 @@
 
 {
 "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.example.customer_emi_app/com.example.customer_emi_app.MyDeviceAdminReceiver",
-"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": "RB-HdEGqYFcITzoW7odtbVwiOd2Xc67dP14AHHa_Ubo",
+"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": "hNIDMIsaHZTSM2m1QXvQ9xf-EtOtKtK0w23yBrFLi8A",
 "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://github.com/Yagnesh-chauhan7/customer_emi_safe/releases/download/version_update/app-release.apk",
 "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
 "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": false
