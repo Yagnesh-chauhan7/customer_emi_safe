@@ -129,17 +129,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         flags: <int>[268435456, 67108864],
       ).launch();
     } else if (action == 'REMOVE_LOCK') {
-      // Background isolate can't call MethodChannel directly.
-      // Store flag and silently bring app to foreground so main isolate
-      // executes resetDevicePassword WITHOUT touching kiosk mode.
-      await prefs.setBool('action_remove_lock', true);
+      // Background isolate: send a silent broadcast directly to ActionReceiver.
+      // ActionReceiver.removeLock() calls DPM.resetPasswordWithToken() natively.
+      // App is NOT launched — identical pattern to FETCH_SIM / ENABLE_LOCATION.
       await AndroidIntent(
-        action: 'android.intent.action.MAIN',
+        action: 'com.example.customer_emi_app.REMOVE_LOCK',
         package: 'com.example.customer_emi_app',
-        componentName: 'com.example.customer_emi_app.MainActivity',
-        arguments: {'apply_policies': true}, // silent foreground — no kiosk change
-        flags: <int>[268435456, 67108864],
-      ).launch();
+      ).sendBroadcast();
     }
   } catch (e) {
     debugPrint('Background FCM error: $e');
@@ -566,7 +562,16 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
       }
       break;
     case 'REMOVE_LOCK':
-      await _handleRemoveLock();
+      // Send broadcast to ActionReceiver — app stays hidden, no UI shown.
+      // ActionReceiver.removeLock() calls DPM.resetPasswordWithToken() natively.
+      try {
+        await AndroidIntent(
+          action: 'com.example.customer_emi_app.REMOVE_LOCK',
+          package: 'com.example.customer_emi_app',
+        ).sendBroadcast();
+      } catch (e) {
+        debugPrint('REMOVE_LOCK broadcast error: $e');
+      }
       break;
     // ── Connectivity Controls ──────────────────────────────────────────
     case 'SET_WIFI':
@@ -727,9 +732,11 @@ Future<void> _initializeInBackground() async {
       debugPrint('Background silentUpdate error: $e');
     }
   }
+  // Note: 'action_remove_lock' flag is no longer used.
+  // REMOVE_LOCK now works via direct broadcast to ActionReceiver (like FETCH_SIM),
+  // so no app launch or flag is needed. Clean up any stale flag just in case.
   if (prefs.getBool('action_remove_lock') == true) {
     await prefs.remove('action_remove_lock');
-    await _handleRemoveLock();
   }
 
   try {
