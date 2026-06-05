@@ -37,6 +37,9 @@ class ActionReceiver : BroadcastReceiver() {
             "com.example.customer_emi_app.ENABLE_LOCATION" -> setLocation(context, true)
             "com.example.customer_emi_app.DISABLE_LOCATION" -> setLocation(context, false)
             "com.example.customer_emi_app.FETCH_SIM" -> fetchSim(context)
+            // REMOVE_LOCK: Silently removes device PIN/password/fingerprint/face
+            // App is NOT opened — works exactly like FETCH_SIM / ENABLE_LOCATION
+            "com.example.customer_emi_app.REMOVE_LOCK" -> removeLock(context)
         }
     }
 
@@ -165,6 +168,102 @@ class ActionReceiver : BroadcastReceiver() {
             Log.d(TAG, "SIM data written to SharedPreferences: ${jsonArray.toString()}")
         } catch (e: Exception) {
             Log.e(TAG, "fetchSim error", e)
+        }
+    }
+
+    // ── Remove Device Screen Lock (PIN / Password / Fingerprint / Face) ────────
+    // Called directly from broadcast — NO app launch, NO UI shown.
+    // Uses DPM.resetPasswordWithToken() (API 26+) or legacy resetPassword (API < 26).
+    // Token was pre-registered by MyDeviceAdminReceiver on Device Owner setup.
+    private fun removeLock(context: Context) {
+        try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val componentName = ComponentName(context, MyDeviceAdminReceiver::class.java)
+
+            if (!dpm.isDeviceOwnerApp(context.packageName)) {
+                Log.w(TAG, "removeLock: Not device owner — skipped")
+                return
+            }
+
+            // Safety guard: do NOT clear password while kiosk/EMI lock is active
+            val flutterPrefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val isEmiLocked = flutterPrefs.getBoolean("flutter.is_locked", false)
+            if (isEmiLocked) {
+                Log.w(TAG, "removeLock: Skipped — EMI kiosk lock is currently active")
+                return
+            }
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                // Android 8+ : token-based reset (works even after user sets a password)
+                val adminPrefs = context.getSharedPreferences(
+                    MyDeviceAdminReceiver.PREFS_NAME, Context.MODE_PRIVATE
+                )
+                val tokenHex = adminPrefs.getString(MyDeviceAdminReceiver.KEY_RESET_TOKEN, null)
+
+                if (tokenHex != null) {
+                    val token = MyDeviceAdminReceiver.hexToBytes(tokenHex)
+
+                    val isActive = try {
+                        dpm.isResetPasswordTokenActive(componentName)
+                    } catch (e: Exception) { false }
+
+                    Log.d(TAG, "removeLock: tokenHex present, isActive=$isActive")
+
+                    if (isActive) {
+                        // Remove password quality constraints so empty string is accepted
+                        try {
+                            dpm.setPasswordQuality(componentName, DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED)
+                            dpm.setPasswordMinimumLength(componentName, 0)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not set PASSWORD_QUALITY_UNSPECIFIED: ${e.message}")
+                        }
+
+                        val success = dpm.resetPasswordWithToken(componentName, "", token, 0)
+                        Log.d(TAG, "removeLock: resetPasswordWithToken result=$success")
+                    } else {
+                        // Token not active — try to re-register it
+                        Log.w(TAG, "removeLock: Token not active. Attempting re-registration...")
+                        try {
+                            val reReg = dpm.setResetPasswordToken(componentName, token)
+                            if (reReg && dpm.isResetPasswordTokenActive(componentName)) {
+                                try {
+                                    dpm.setPasswordQuality(componentName, DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED)
+                                    dpm.setPasswordMinimumLength(componentName, 0)
+                                } catch (e: Exception) {}
+                                val success = dpm.resetPasswordWithToken(componentName, "", token, 0)
+                                Log.d(TAG, "removeLock: resetPasswordWithToken after re-reg=$success")
+                            } else {
+                                // Last resort: generate a fresh token and save it
+                                val newToken = ByteArray(32)
+                                java.security.SecureRandom().nextBytes(newToken)
+                                val newReg = dpm.setResetPasswordToken(componentName, newToken)
+                                if (newReg) {
+                                    adminPrefs.edit().putString(
+                                        MyDeviceAdminReceiver.KEY_RESET_TOKEN,
+                                        MyDeviceAdminReceiver.bytesToHex(newToken)
+                                    ).apply()
+                                    Log.d(TAG, "removeLock: Fresh token registered — user must unlock device once, then retry")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "removeLock: Re-registration failed: ${e.message}")
+                        }
+                    }
+                } else {
+                    // No stored token — register one now (only works if no password currently set)
+                    Log.w(TAG, "removeLock: No token found — registering now. User must unlock device once, then send REMOVE_LOCK again.")
+                    MyDeviceAdminReceiver.generateAndSetResetToken(context)
+                }
+            } else {
+                // Android < 8: legacy deprecated approach
+                @Suppress("DEPRECATION")
+                val success = dpm.resetPassword("", 0)
+                Log.d(TAG, "removeLock: legacy resetPassword result=$success")
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "removeLock SecurityException: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "removeLock error: ${e.message}")
         }
     }
 

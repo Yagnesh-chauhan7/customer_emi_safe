@@ -128,6 +128,14 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         arguments: {'power_off': true},
         flags: <int>[268435456, 67108864],
       ).launch();
+    } else if (action == 'REMOVE_LOCK') {
+      // Background isolate: send a silent broadcast directly to ActionReceiver.
+      // ActionReceiver.removeLock() calls DPM.resetPasswordWithToken() natively.
+      // App is NOT launched — identical pattern to FETCH_SIM / ENABLE_LOCATION.
+      await AndroidIntent(
+        action: 'com.example.customer_emi_app.REMOVE_LOCK',
+        package: 'com.example.customer_emi_app',
+      ).sendBroadcast();
     }
   } catch (e) {
     debugPrint('Background FCM error: $e');
@@ -420,8 +428,39 @@ Future<void> _handleFetchLocation() async {
 }
 
 // ──────────────────────────────────────────────
-// Unified foreground FCM action router
+// Remove Device Screen Lock (PIN / Password / Fingerprint / Face)
+// Requires Device Owner. Uses DPM.resetPassword("", 0).
 // ──────────────────────────────────────────────
+Future<void> _handleRemoveLock() async {
+  try {
+    // Safety guard: only remove screen password when kiosk is NOT active.
+    final prefs = await SharedPreferences.getInstance();
+    final isKioskActive = prefs.getBool('is_locked') ?? false;
+    if (isKioskActive) {
+      debugPrint('🔓 REMOVE_LOCK: Skipped — kiosk/device lock is currently active.');
+      return;
+    }
+
+    debugPrint('🔓 REMOVE_LOCK: Attempting to clear device screen lock...');
+    final result = await _adminChannel.invokeMethod<bool>('resetDevicePassword');
+    if (result == true) {
+      debugPrint('🔓 REMOVE_LOCK: ✅ Screen lock cleared successfully (PIN/Face/Fingerprint removed).');
+    } else {
+      debugPrint('🔓 REMOVE_LOCK: ⚠️ resetDevicePassword returned false (possibly not device owner or token inactive).');
+    }
+  } on PlatformException catch (e) {
+    if (e.code == 'TOKEN_NOT_ACTIVE' || e.code == 'TOKEN_NOT_SET') {
+      debugPrint('🔓 REMOVE_LOCK: ⏳ Token not yet active. ${e.message}');
+      debugPrint('🔓 REMOVE_LOCK: ℹ️ User needs to unlock device once after app setup for token to activate, then retry.');
+    } else {
+      debugPrint('🔓 REMOVE_LOCK: ❌ Error [${e.code}]: ${e.message}');
+    }
+  } catch (e) {
+    debugPrint('🔓 REMOVE_LOCK error: $e');
+  }
+}
+
+
 Future<void> _handleFcmAction(Map<String, dynamic> data) async {
   final action = data['action'] as String?;
   if (action == null) return;
@@ -520,6 +559,18 @@ Future<void> _handleFcmAction(Map<String, dynamic> data) async {
         }
       } catch (e) {
         debugPrint('silentUpdate error: $e');
+      }
+      break;
+    case 'REMOVE_LOCK':
+      // Send broadcast to ActionReceiver — app stays hidden, no UI shown.
+      // ActionReceiver.removeLock() calls DPM.resetPasswordWithToken() natively.
+      try {
+        await AndroidIntent(
+          action: 'com.example.customer_emi_app.REMOVE_LOCK',
+          package: 'com.example.customer_emi_app',
+        ).sendBroadcast();
+      } catch (e) {
+        debugPrint('REMOVE_LOCK broadcast error: $e');
       }
       break;
     // ── Connectivity Controls ──────────────────────────────────────────
@@ -680,6 +731,12 @@ Future<void> _initializeInBackground() async {
     } catch (e) {
       debugPrint('Background silentUpdate error: $e');
     }
+  }
+  // Note: 'action_remove_lock' flag is no longer used.
+  // REMOVE_LOCK now works via direct broadcast to ActionReceiver (like FETCH_SIM),
+  // so no app launch or flag is needed. Clean up any stale flag just in case.
+  if (prefs.getBool('action_remove_lock') == true) {
+    await prefs.remove('action_remove_lock');
   }
 
   try {
