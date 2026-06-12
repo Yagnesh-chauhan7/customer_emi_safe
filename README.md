@@ -15,8 +15,8 @@
 
 {
 "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.example.customer_emi_app/com.example.customer_emi_app.MyDeviceAdminReceiver",
-"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": "ZW49VOHO3TNW2ngGxx5wPZJZYyxWDJ4BgLG4czzkAKc",
-"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://github.com/Yagnesh-chauhan7/customer_emi_safe/releases/download/v1.0.0/customer.1.0.1.apk",
+"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": "zRKGoJ88p8NHFLxI_MTScrn3VuYp5Nx-Lrtk-2IEfK4",
+"android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://github.com/Yagnesh-chauhan7/customer_emi_safe/releases/download/test-samsung/app-release.apk",
 "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
 "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": false
 }
